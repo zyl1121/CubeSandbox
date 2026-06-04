@@ -20,6 +20,10 @@ type Status struct {
 	UnhealthyReason string
 }
 
+func MetadataTimeout(syncMetaDataInterval time.Duration) time.Duration {
+	return syncMetaDataInterval + 10*time.Second
+}
+
 func ReadyConditionTrue(conditions []corev1.NodeCondition) bool {
 	for _, cond := range conditions {
 		if cond.Type == corev1.NodeReady {

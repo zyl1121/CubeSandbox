@@ -164,7 +164,7 @@ func GetNode(id string) (*node.Node, bool) {
 }
 
 func metadataHealthTimeout() time.Duration {
-	return config.GetConfig().Common.SyncMetaDataInterval + 10*time.Second
+	return nodehealth.MetadataTimeout(config.GetConfig().Common.SyncMetaDataInterval)
 }
 
 func cloneNodeWithCurrentHealth(n *node.Node, now time.Time) *node.Node {

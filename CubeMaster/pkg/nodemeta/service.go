@@ -386,7 +386,7 @@ func (s *service) reload() error {
 }
 
 func healthTimeout() time.Duration {
-	return config.GetConfig().Common.SyncMetaDataInterval + 10*time.Second
+	return nodehealth.MetadataTimeout(config.GetConfig().Common.SyncMetaDataInterval)
 }
 
 func currentHealthStatus(snap *NodeSnapshot, now time.Time) nodehealth.Status {
