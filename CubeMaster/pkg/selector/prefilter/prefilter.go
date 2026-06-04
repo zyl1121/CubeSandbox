@@ -77,17 +77,20 @@ func (l *prefilter) Select(selCtx *selctx.SelectorCtx) (node.NodeList, error) {
 		if time.Since(n.MetricUpdate) > sconf.MetricUpdateTimeout {
 			log.G(selCtx.Ctx).WithFields(map[string]any{
 				"CalleeCluster": n.ClusterLabel,
-			}).Fatalf("%s MetricUpdate timeout,lastupdate:%v", n.IP, n.MetricUpdate)
+			}).Warnf("%s MetricUpdate timeout,lastupdate:%v", n.IP, n.MetricUpdate)
+			continue
 		}
 		if time.Since(n.MetricLocalUpdateAt) > sconf.MetricUpdateTimeout {
 			log.G(selCtx.Ctx).WithFields(map[string]any{
 				"CalleeCluster": n.ClusterLabel,
-			}).Fatalf("%s MetricLocalUpdate timeout,lastupdate:%v", n.IP, n.MetricLocalUpdateAt)
+			}).Warnf("%s MetricLocalUpdate timeout,lastupdate:%v", n.IP, n.MetricLocalUpdateAt)
+			continue
 		}
 		if time.Since(n.MetaDataUpdateAt) > metaDataUpdateAtTimeout {
 			log.G(selCtx.Ctx).WithFields(map[string]any{
 				"CalleeCluster": n.ClusterLabel,
-			}).Fatalf("%s MetaDataUpdate timeout,lastupdate:%v", n.IP, n.MetaDataUpdateAt)
+			}).Warnf("%s MetaDataUpdate timeout,lastupdate:%v", n.IP, n.MetaDataUpdateAt)
+			continue
 		}
 		newNodes.Append(n)
 	}

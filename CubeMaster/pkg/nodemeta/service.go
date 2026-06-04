@@ -18,6 +18,7 @@ import (
 	"github.com/tencentcloud/CubeSandbox/CubeMaster/pkg/base/db/models"
 	"github.com/tencentcloud/CubeSandbox/CubeMaster/pkg/base/log"
 	"github.com/tencentcloud/CubeSandbox/CubeMaster/pkg/base/node"
+	"github.com/tencentcloud/CubeSandbox/CubeMaster/pkg/base/nodehealth"
 	"github.com/tencentcloud/CubeSandbox/CubeMaster/pkg/localcache"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -111,7 +112,9 @@ type NodeSnapshot struct {
 	Images              []ContainerImage       `json:"images,omitempty"`
 	LocalTemplates      []LocalTemplate        `json:"local_templates,omitempty"`
 	HeartbeatTime       time.Time              `json:"heartbeat_time,omitempty"`
-	Healthy             bool                   `json:"healthy,omitempty"`
+	ReportedReady       bool                   `json:"-"`
+	Healthy             bool                   `json:"healthy"`
+	UnhealthyReason     string                 `json:"unhealthy_reason,omitempty"`
 }
 
 type service struct {
@@ -206,13 +209,14 @@ func UpdateNodeStatus(ctx context.Context, nodeID string, req *UpdateNodeStatusR
 	if req.HeartbeatTime.IsZero() {
 		req.HeartbeatTime = time.Now()
 	}
+	reportedReady := nodehealth.ReadyConditionTrue(req.Conditions)
 	status := &models.NodeStatus{
 		NodeID:             nodeID,
 		ConditionsJSON:     mustJSON(req.Conditions),
 		ImagesJSON:         mustJSON(req.Images),
 		LocalTemplatesJSON: mustJSON(req.LocalTemplates),
 		HeartbeatUnix:      req.HeartbeatTime.Unix(),
-		Healthy:            isHealthy(req.Conditions),
+		Healthy:            reportedReady,
 	}
 	if err := global.db.Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "node_id"}},
@@ -231,7 +235,8 @@ func UpdateNodeStatus(ctx context.Context, nodeID string, req *UpdateNodeStatusR
 	snap.Images = append([]ContainerImage(nil), req.Images...)
 	snap.LocalTemplates = append([]LocalTemplate(nil), req.LocalTemplates...)
 	snap.HeartbeatTime = req.HeartbeatTime
-	snap.Healthy = status.Healthy
+	snap.ReportedReady = reportedReady
+	applyCurrentHealth(snap, time.Now())
 	global.mu.Unlock()
 	syncLocalcache(snap)
 
@@ -292,7 +297,7 @@ func GetNode(ctx context.Context, nodeID string) (*NodeSnapshot, error) {
 	if !ok {
 		return nil, gorm.ErrRecordNotFound
 	}
-	return cloneSnapshot(snap), nil
+	return cloneSnapshotWithCurrentHealth(snap, time.Now()), nil
 }
 
 func ListNodes(ctx context.Context) ([]*NodeSnapshot, error) {
@@ -300,8 +305,9 @@ func ListNodes(ctx context.Context) ([]*NodeSnapshot, error) {
 	global.mu.RLock()
 	defer global.mu.RUnlock()
 	out := make([]*NodeSnapshot, 0, len(global.nodes))
+	now := time.Now()
 	for _, snap := range global.nodes {
-		out = append(out, cloneSnapshot(snap))
+		out = append(out, cloneSnapshotWithCurrentHealth(snap, now))
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].NodeID < out[j].NodeID })
 	return out, nil
@@ -370,7 +376,8 @@ func (s *service) reload() error {
 		_ = json.Unmarshal([]byte(st.ImagesJSON), &snap.Images)
 		_ = json.Unmarshal([]byte(st.LocalTemplatesJSON), &snap.LocalTemplates)
 		snap.HeartbeatTime = time.Unix(st.HeartbeatUnix, 0)
-		snap.Healthy = st.Healthy
+		snap.ReportedReady = st.Healthy
+		applyCurrentHealth(snap, time.Now())
 	}
 	s.mu.Lock()
 	s.nodes = next
@@ -378,19 +385,31 @@ func (s *service) reload() error {
 	return nil
 }
 
-func isHealthy(conditions []corev1.NodeCondition) bool {
-	for _, cond := range conditions {
-		if cond.Type == corev1.NodeReady {
-			return cond.Status == corev1.ConditionTrue
-		}
+func healthTimeout() time.Duration {
+	return config.GetConfig().Common.SyncMetaDataInterval + 10*time.Second
+}
+
+func currentHealthStatus(snap *NodeSnapshot, now time.Time) nodehealth.Status {
+	if snap == nil {
+		return nodehealth.Status{Healthy: false, UnhealthyReason: nodehealth.ReasonHeartbeatExpired}
 	}
-	return false
+	return nodehealth.EvaluateFromFacts(snap.ReportedReady, snap.HeartbeatTime, now, healthTimeout())
+}
+
+func applyCurrentHealth(snap *NodeSnapshot, now time.Time) {
+	if snap == nil {
+		return
+	}
+	status := currentHealthStatus(snap, now)
+	snap.Healthy = status.Healthy
+	snap.UnhealthyReason = status.UnhealthyReason
 }
 
 func toSchedulerNode(snap *NodeSnapshot) *node.Node {
 	if snap == nil {
 		return nil
 	}
+	status := currentHealthStatus(snap, time.Now())
 	quotaCPU := snap.QuotaCPU
 	if quotaCPU == 0 {
 		quotaCPU = snap.Allocatable.MilliCPU
@@ -419,7 +438,9 @@ func toSchedulerNode(snap *NodeSnapshot) *node.Node {
 		OssClusterLabel:     snap.ClusterLabel,
 		InstanceType:        instanceType,
 		HostStatus:          constants.HostStatusRunning,
-		Healthy:             snap.Healthy,
+		ReportedReady:       snap.ReportedReady,
+		Healthy:             status.Healthy,
+		UnhealthyReason:     status.UnhealthyReason,
 		CreateConcurrentNum: snap.CreateConcurrentNum,
 		MaxMvmLimit:         snap.MaxMvmNum,
 		MetaDataUpdateAt:    snap.HeartbeatTime,
@@ -462,6 +483,12 @@ func cloneSnapshot(in *NodeSnapshot) *NodeSnapshot {
 	out.Images = append([]ContainerImage(nil), in.Images...)
 	out.LocalTemplates = append([]LocalTemplate(nil), in.LocalTemplates...)
 	return &out
+}
+
+func cloneSnapshotWithCurrentHealth(in *NodeSnapshot, now time.Time) *NodeSnapshot {
+	out := cloneSnapshot(in)
+	applyCurrentHealth(out, now)
+	return out
 }
 
 func cloneStringMap(in map[string]string) map[string]string {

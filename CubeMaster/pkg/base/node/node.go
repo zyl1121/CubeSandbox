@@ -54,7 +54,11 @@ type Node struct {
 
 	MetaDataUpdateAt time.Time `json:"MetaDataUpdateAt,omitempty"`
 
-	Healthy bool `json:"Healthy,omitempty"`
+	ReportedReady bool `json:"-"`
+
+	Healthy bool `json:"Healthy"`
+
+	UnhealthyReason string `json:"UnhealthyReason,omitempty"`
 
 	Score float64 `json:"Score,omitempty"`
 
@@ -82,6 +86,17 @@ type Node struct {
 
 	LocalCreateNum int64 `json:"LocalCreateNum,omitempty"`
 	NicQueues      int64 `json:"nic_queues,omitempty"`
+}
+
+func (n *Node) Clone() *Node {
+	if n == nil {
+		return nil
+	}
+	cloned := *n
+	if n.VirtualNodeQuotaArray != nil {
+		cloned.VirtualNodeQuotaArray = append([]int64(nil), n.VirtualNodeQuotaArray...)
+	}
+	return &cloned
 }
 
 func (n *Node) ID() string {
