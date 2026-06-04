@@ -194,6 +194,7 @@ func RegisterNode(ctx context.Context, req *RegisterNodeRequest) (*NodeSnapshot,
 	snap.QuotaMemMB = req.QuotaMemMB
 	snap.CreateConcurrentNum = req.CreateConcurrentNum
 	snap.MaxMvmNum = req.MaxMvmNum
+	applyCurrentHealth(snap, time.Now())
 	global.mu.Unlock()
 	syncLocalcache(snap)
 	return cloneSnapshot(snap), nil
@@ -409,7 +410,6 @@ func toSchedulerNode(snap *NodeSnapshot) *node.Node {
 	if snap == nil {
 		return nil
 	}
-	status := currentHealthStatus(snap, time.Now())
 	quotaCPU := snap.QuotaCPU
 	if quotaCPU == 0 {
 		quotaCPU = snap.Allocatable.MilliCPU
@@ -439,8 +439,8 @@ func toSchedulerNode(snap *NodeSnapshot) *node.Node {
 		InstanceType:        instanceType,
 		HostStatus:          constants.HostStatusRunning,
 		ReportedReady:       snap.ReportedReady,
-		Healthy:             status.Healthy,
-		UnhealthyReason:     status.UnhealthyReason,
+		Healthy:             snap.Healthy,
+		UnhealthyReason:     snap.UnhealthyReason,
 		CreateConcurrentNum: snap.CreateConcurrentNum,
 		MaxMvmLimit:         snap.MaxMvmNum,
 		MetaDataUpdateAt:    snap.HeartbeatTime,

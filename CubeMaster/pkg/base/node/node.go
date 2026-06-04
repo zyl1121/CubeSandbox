@@ -92,7 +92,12 @@ func (n *Node) Clone() *Node {
 	if n == nil {
 		return nil
 	}
+	// Clone provides a best-effort read-side snapshot. Mutable counters such
+	// as LocalCreateNum are refreshed via atomic loads after the structural
+	// copy so cloned read models stay aligned with the write path.
+	localCreateNum := atomic.LoadInt64(&n.LocalCreateNum)
 	cloned := *n
+	cloned.LocalCreateNum = localCreateNum
 	if n.VirtualNodeQuotaArray != nil {
 		cloned.VirtualNodeQuotaArray = append([]int64(nil), n.VirtualNodeQuotaArray...)
 	}

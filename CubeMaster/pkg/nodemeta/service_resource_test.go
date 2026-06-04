@@ -52,6 +52,27 @@ func TestToSchedulerNodeDoesNotForgeMetricUpdate(t *testing.T) {
 	}
 }
 
+func TestToSchedulerNodeUsesPrecomputedHealth(t *testing.T) {
+	snap := &NodeSnapshot{
+		NodeID:          "node-health",
+		HostIP:          "10.0.0.9",
+		HeartbeatTime:   time.Now(),
+		ReportedReady:   true,
+		Healthy:         false,
+		UnhealthyReason: nodehealth.ReasonHeartbeatExpired,
+	}
+	n := toSchedulerNode(snap)
+	if n == nil {
+		t.Fatal("toSchedulerNode returned nil")
+	}
+	if n.Healthy {
+		t.Fatal("toSchedulerNode should preserve snapshot health state")
+	}
+	if n.UnhealthyReason != nodehealth.ReasonHeartbeatExpired {
+		t.Fatalf("UnhealthyReason=%s want %s", n.UnhealthyReason, nodehealth.ReasonHeartbeatExpired)
+	}
+}
+
 func TestCurrentHealthStatusExpiresStaleHeartbeat(t *testing.T) {
 	now := time.Now()
 
@@ -75,6 +96,20 @@ func TestCurrentHealthStatusExpiresStaleHeartbeat(t *testing.T) {
 			NodeID:        "node-b",
 			HeartbeatTime: now.Add(-(healthTimeout() + time.Second)),
 			ReportedReady: true,
+		}
+		got := currentHealthStatus(snap, now)
+		if got.Healthy {
+			t.Fatalf("Healthy=%v want false", got.Healthy)
+		}
+		if got.UnhealthyReason != nodehealth.ReasonHeartbeatExpired {
+			t.Fatalf("UnhealthyReason=%s want %s", got.UnhealthyReason, nodehealth.ReasonHeartbeatExpired)
+		}
+	})
+
+	t.Run("missing heartbeat is treated as expired", func(t *testing.T) {
+		snap := &NodeSnapshot{
+			NodeID:        "node-missing",
+			ReportedReady: false,
 		}
 		got := currentHealthStatus(snap, now)
 		if got.Healthy {

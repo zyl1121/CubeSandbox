@@ -12,7 +12,6 @@ import (
 	"github.com/tencentcloud/CubeSandbox/CubeMaster/pkg/base/constants"
 	"github.com/tencentcloud/CubeSandbox/CubeMaster/pkg/base/log"
 	"github.com/tencentcloud/CubeSandbox/CubeMaster/pkg/base/node"
-	"github.com/tencentcloud/CubeSandbox/CubeMaster/pkg/base/nodehealth"
 	"github.com/tencentcloud/CubeSandbox/CubeMaster/pkg/base/ret"
 	"github.com/tencentcloud/CubeSandbox/CubeMaster/pkg/errorcode"
 	"github.com/tencentcloud/CubeSandbox/CubeMaster/pkg/localcache"
@@ -43,7 +42,6 @@ func (l *prefilter) Select(selCtx *selctx.SelectorCtx) (node.NodeList, error) {
 		log.G(selCtx.Ctx).Debugf("GetHealthyNodesByInstanceType:%+v,size:%d", nodes.String(), nodes.Len())
 	}
 	newNodes := make(node.NodeList, 0, nodes.Len())
-	metaDataUpdateAtTimeout := nodehealth.MetadataTimeout(config.GetConfig().Common.SyncMetaDataInterval)
 	for i := range nodes {
 		n := nodes[i]
 		if !n.Healthy {
@@ -85,12 +83,6 @@ func (l *prefilter) Select(selCtx *selctx.SelectorCtx) (node.NodeList, error) {
 			log.G(selCtx.Ctx).WithFields(map[string]any{
 				"CalleeCluster": n.ClusterLabel,
 			}).Warnf("%s MetricLocalUpdate timeout,lastupdate:%v", n.IP, n.MetricLocalUpdateAt)
-			continue
-		}
-		if time.Since(n.MetaDataUpdateAt) > metaDataUpdateAtTimeout {
-			log.G(selCtx.Ctx).WithFields(map[string]any{
-				"CalleeCluster": n.ClusterLabel,
-			}).Warnf("%s MetaDataUpdate timeout,lastupdate:%v", n.IP, n.MetaDataUpdateAt)
 			continue
 		}
 		newNodes.Append(n)

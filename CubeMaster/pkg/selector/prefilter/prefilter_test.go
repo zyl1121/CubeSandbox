@@ -27,7 +27,7 @@ func init() {
 	}
 }
 
-func TestPreFilterExcludesExpiredHeartbeatNode(t *testing.T) {
+func TestPreFilterExcludesUnhealthyNode(t *testing.T) {
 	now := time.Now()
 	fresh := &node.Node{
 		InsID:               "node-fresh",
@@ -40,8 +40,9 @@ func TestPreFilterExcludesExpiredHeartbeatNode(t *testing.T) {
 	stale := &node.Node{
 		InsID:               "node-stale",
 		IP:                  "10.0.0.2",
-		Healthy:             true,
-		MetaDataUpdateAt:    now.Add(-(config.GetConfig().Common.SyncMetaDataInterval + 11*time.Second)),
+		Healthy:             false,
+		UnhealthyReason:     "HeartbeatExpired",
+		MetaDataUpdateAt:    now,
 		MetricUpdate:        now,
 		MetricLocalUpdateAt: now,
 	}
