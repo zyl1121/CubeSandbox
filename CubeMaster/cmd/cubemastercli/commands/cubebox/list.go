@@ -35,7 +35,7 @@ type listSummary struct {
 var ListCommand = cli.Command{
 	Name:    "list",
 	Aliases: []string{"ls"},
-	Usage:   "list sandboxes",
+	Usage:   "list cubeboxes",
 	Flags: []cli.Flag{
 		cli.IntFlag{
 			Name:  "index,i",
@@ -62,7 +62,7 @@ var ListCommand = cli.Command{
 		cli.StringFlag{
 			Name:  "type",
 			Value: "cubebox",
-			Usage: "instancetype,cubebox",
+			Usage: "instance type, default: cubebox",
 		},
 		cli.BoolFlag{
 			Name:  "delete",

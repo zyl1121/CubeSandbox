@@ -19,7 +19,7 @@ import (
 
 var ShowDbCommand = cli.Command{
 	Name:  "dbs",
-	Usage: "show all bucket name of db",
+	Usage: "show all DB bucket names",
 	Flags: []cli.Flag{
 		&cli.StringFlag{
 			Name:  "o",
@@ -65,7 +65,7 @@ var ListDbCommand = cli.Command{
 	Flags: []cli.Flag{
 		&cli.StringFlag{
 			Name:  "db",
-			Usage: "db name, this is required to access standlan db",
+			Usage: "DB name; required to access a standalone DB",
 		},
 		&cli.StringFlag{
 			Name:  "key",

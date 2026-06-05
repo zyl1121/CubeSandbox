@@ -18,13 +18,13 @@ import (
 
 var Destroy = &cli.Command{
 	Name:    "destroy",
-	Usage:   "destroy cubebox",
+	Usage:   "destroy cubeboxes",
 	Aliases: []string{"rm"},
 	Flags: []cli.Flag{
 		&cli.StringFlag{
 			Name:    "name",
 			Aliases: []string{"n"},
-			Usage:   "sandboxId",
+			Usage:   "sandbox ID",
 		},
 		&cli.StringFlag{
 			Name:  "annotation",
@@ -35,12 +35,12 @@ var Destroy = &cli.Command{
 			Aliases: []string{
 				"a",
 			},
-			Usage: "destroy all",
+			Usage: "destroy all cubeboxes",
 		},
 		&cli.BoolFlag{
 			Name:    "force",
 			Aliases: []string{"f"},
-			Usage:   "skip list,just do destroy",
+			Usage:   "skip listing and destroy directly",
 		},
 	},
 	Action: func(context *cli.Context) error {
@@ -131,12 +131,12 @@ var Destroy = &cli.Command{
 
 var DestroyAll = &cli.Command{
 	Name:  "destroyall",
-	Usage: "destroy all cubebox",
+	Usage: "destroy all cubeboxes",
 	Flags: []cli.Flag{
 		&cli.BoolFlag{
 			Name:    "force",
 			Aliases: []string{"f"},
-			Usage:   "remove all",
+			Usage:   "include non-running cubeboxes",
 		},
 	},
 	Action: func(context *cli.Context) error {

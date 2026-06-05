@@ -27,7 +27,7 @@ import (
 
 var InfoCommand = cli.Command{
 	Name:  "info",
-	Usage: "info sandboxes",
+	Usage: "show cubebox info",
 	Flags: []cli.Flag{
 		cli.StringFlag{
 			Name:  "sandboxid,s",

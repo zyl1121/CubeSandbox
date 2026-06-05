@@ -11,7 +11,7 @@ import (
 var Command = &cli.Command{
 	Name:    "cubebox",
 	Aliases: []string{"b"},
-	Usage:   "manage cubebox",
+	Usage:   "manage cubeboxes",
 	Subcommands: []*cli.Command{
 		ListCommand,
 		ListSandboxCommand,

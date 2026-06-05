@@ -30,22 +30,22 @@ func New() *cli.App {
 	app.Name = "cubemastercli"
 	app.Version = pkgv.ShowVersion()
 	app.Usage = usage
-	app.Description = `cubemastercli cli tools`
+	app.Description = `CLI tools for CubeMaster`
 	app.Flags = []cli.Flag{
 		cli.StringFlag{
 			Name:  "address, a",
 			Value: "0.0.0.0",
-			Usage: "addresses for cubemaster server, ip1,ip2,ip3,default 0.0.0.0",
+			Usage: "CubeMaster server addresses, e.g. ip1,ip2,ip3; default: 0.0.0.0",
 		},
 		cli.StringFlag{
 			Name:  "port, p",
 			Value: "8089",
-			Usage: "port for cubemaster server",
+			Usage: "CubeMaster server port",
 		},
 		cli.DurationFlag{
 			Name:  "timeout",
 			Value: 35 * time.Second,
-			Usage: "total timeout for ctr commands",
+			Usage: "total timeout for CLI requests",
 		},
 	}
 	app.Commands = append([]cli.Command{

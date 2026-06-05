@@ -12,7 +12,7 @@ import (
 var Command = cli.Command{
 	Name:    "cubebox",
 	Aliases: []string{"cubebox"},
-	Usage:   "manage cubebox",
+	Usage:   "manage cubeboxes",
 	Subcommands: cli.Commands{
 		MultiRun,
 		ListCommand,
@@ -30,7 +30,7 @@ var Command = cli.Command{
 
 var SandboxCommand = cli.Command{
 	Name:  "sandbox",
-	Usage: "sandbox operations",
+	Usage: "cubebox sandbox operations",
 	Subcommands: cli.Commands{
 		RollbackCommand,
 	},

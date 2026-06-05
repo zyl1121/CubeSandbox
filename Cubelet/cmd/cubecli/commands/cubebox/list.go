@@ -24,7 +24,7 @@ import (
 var ListCommand = &cli.Command{
 	Name:    "list",
 	Aliases: []string{"ls"},
-	Usage:   "Warning: `cuebcli ls` is deprecated, please use `cubecli cubebox ls` instead",
+	Usage:   "Warning: `cubecli ls` is deprecated, please use `cubecli cubebox ls` instead",
 	ArgsUsage: "[flags] [<filter>, ...]\n" +
 		"io.kubernetes.cri.container-type [container|sandbox]\n" +
 		"io.kubernetes.cri.sandbox-id xx",
@@ -56,16 +56,16 @@ var ListCommand = &cli.Command{
 		&cli.StringFlag{
 			Name:    "sandbox",
 			Aliases: []string{"s"},
-			Usage:   "filter sandbox",
+			Usage:   "filter by sandbox ID",
 		},
 		&cli.BoolFlag{
 			Name:  "log-res",
-			Usage: "print and log the container(exception sandbox) resources to logfile,should set quiet to true",
+			Usage: "print and log container resources excluding sandbox overhead; requires --quiet",
 		},
 		&cli.BoolFlag{
 			Name:    "wide",
 			Aliases: []string{"w"},
-			Usage:   "display more detailed info, like portmapping",
+			Usage:   "display more detailed info, such as port mapping",
 		},
 		&cli.BoolFlag{
 			Name:  "raw",
@@ -246,7 +246,7 @@ func formatTime(created int64) string {
 var ListSandboxCommand = &cli.Command{
 	Name:    "sandboxes",
 	Aliases: []string{"s"},
-	Usage:   "list cubebox sandboxs",
+	Usage:   "list cubebox sandboxes",
 	ArgsUsage: "[flags] [<filter>, ...]\n" +
 		"io.kubernetes.cri.container-type [container|sandbox]\n" +
 		"io.kubernetes.cri.sandbox-id xx",

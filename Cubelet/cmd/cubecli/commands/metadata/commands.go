@@ -9,7 +9,7 @@ import "github.com/urfave/cli/v2"
 var Command = &cli.Command{
 	Name:    "meta",
 	Aliases: []string{"m"},
-	Usage:   "manage metadata, warning: this command is readonly,\n do not use it to update metadata!!!!!",
+	Usage:   "inspect metadata; this command is read-only and must not be used to update metadata",
 	Subcommands: cli.Commands{
 		&ShowDbCommand,
 		&ListDbCommand,

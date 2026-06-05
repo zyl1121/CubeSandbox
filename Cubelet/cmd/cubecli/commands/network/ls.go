@@ -35,7 +35,7 @@ const cmdTimeout = time.Second * 3
 
 var list = &cli.Command{
 	Name:  "ls",
-	Usage: "ls all network(tap)",
+	Usage: "list all tap networks",
 	Flags: []cli.Flag{
 		&cli.StringFlag{
 			Name:    "config",

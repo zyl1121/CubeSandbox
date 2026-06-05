@@ -17,7 +17,7 @@ import (
 var inspecMetaData = cli.Command{
 	Name:      "inspect",
 	Aliases:   []string{"i", "info"},
-	Usage:     "stat metadata of cubebox.",
+	Usage:     "inspect cubebox metadata",
 	ArgsUsage: "CUBEBOX-ID [CUBEBOX-ID ...]",
 	Action: func(context *cli.Context) error {
 		var ids []string
