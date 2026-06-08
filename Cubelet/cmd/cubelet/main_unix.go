@@ -60,6 +60,9 @@ func handleSignals(ctx context.Context, signals chan os.Signal, serverC chan *se
 				case unix.SIGUSR1:
 					dumpStacks(true)
 				default:
+					if err := ReportShutdownStatus(ctx); err != nil {
+						log.G(ctx).WithError(err).Warn("report shutdown status failed")
+					}
 					if err := notifyStopping(ctx); err != nil {
 						log.G(ctx).WithError(err).Error("notify stopping failed")
 					}
