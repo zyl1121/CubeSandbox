@@ -21,7 +21,7 @@ import (
 var Create = &cli.Command{
 	Name:      "create",
 	Aliases:   []string{"test"},
-	Usage:     "create cubeboxes from JSON request files",
+	Usage:     "create cubebox from request file encoded in json",
 	UsageText: "cubecli cubebox create [req.json]",
 	Flags: []cli.Flag{
 		&cli.DurationFlag{
@@ -31,7 +31,7 @@ var Create = &cli.Command{
 		},
 		&cli.BoolFlag{
 			Name:        "rm",
-			Usage:       "remove created cubeboxes on exit",
+			Usage:       "rm pods while exit",
 			DefaultText: "true",
 		},
 	},

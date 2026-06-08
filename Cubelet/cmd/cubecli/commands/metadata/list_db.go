@@ -19,7 +19,7 @@ import (
 
 var ShowDbCommand = cli.Command{
 	Name:  "dbs",
-	Usage: "show all DB bucket names",
+	Usage: "show all bucket name of db",
 	Flags: []cli.Flag{
 		&cli.StringFlag{
 			Name:  "o",

@@ -50,7 +50,7 @@ func (v *createInfo) String() string {
 
 var volumedb = &cli.Command{
 	Name:  "volumedb",
-	Usage: "scan volume DBs",
+	Usage: "scan volumedb db ",
 	Flags: []cli.Flag{
 		&cli.StringFlag{
 			Name:    "config",

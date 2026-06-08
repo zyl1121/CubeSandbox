@@ -10,7 +10,7 @@ import (
 
 var Command = &cli.Command{
 	Name:  "vm",
-	Usage: "manage virtual machines",
+	Usage: "manage vm",
 	Subcommands: []*cli.Command{
 		CounterCommand,
 	},

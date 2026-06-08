@@ -56,16 +56,16 @@ var ListCommand = &cli.Command{
 		&cli.StringFlag{
 			Name:    "sandbox",
 			Aliases: []string{"s"},
-			Usage:   "filter by sandbox ID",
+			Usage:   "filter sandbox",
 		},
 		&cli.BoolFlag{
 			Name:  "log-res",
-			Usage: "print and log container resources excluding sandbox overhead; requires --quiet",
+			Usage: "print and log the container(exception sandbox) resources to logfile,should set quiet to true",
 		},
 		&cli.BoolFlag{
 			Name:    "wide",
 			Aliases: []string{"w"},
-			Usage:   "display more detailed info, such as port mapping",
+			Usage:   "display more detailed info, like portmapping",
 		},
 		&cli.BoolFlag{
 			Name:  "raw",
