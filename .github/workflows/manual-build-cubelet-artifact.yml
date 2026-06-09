@@ -1,7 +1,14 @@
 name: Manual Build Cubelet Artifact
 
+run-name: Build cubelet from ${{ inputs.target_ref }}
+
 on:
   workflow_dispatch:
+    inputs:
+      target_ref:
+        description: "Branch, tag, or commit SHA to build"
+        required: true
+        default: "main"
 
 permissions:
   contents: read
@@ -17,10 +24,38 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout target ref
         uses: actions/checkout@v6
         with:
+          ref: ${{ inputs.target_ref }}
           fetch-depth: 0
+          # 这里只是构建，不需要把 token 写进 git config
+          persist-credentials: false
+
+      - name: Resolve target revision
+        id: target
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          full_sha="$(git rev-parse HEAD)"
+          short_sha="$(git rev-parse --short=12 HEAD)"
+
+          # artifact 名字不能直接带 slash，例如 feature/foo
+          safe_ref="$(printf '%s' '${{ inputs.target_ref }}' \
+            | sed 's#[/: ]#-#g' \
+            | tr -cd 'A-Za-z0-9._-')"
+
+          echo "full_sha=${full_sha}" >> "${GITHUB_OUTPUT}"
+          echo "short_sha=${short_sha}" >> "${GITHUB_OUTPUT}"
+          echo "safe_ref=${safe_ref}" >> "${GITHUB_OUTPUT}"
+
+          {
+            echo "## Cubelet build target"
+            echo ""
+            echo "- Ref: \`${{ inputs.target_ref }}\`"
+            echo "- Commit: \`${full_sha}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Log in to GitHub Container Registry
         id: ghcr_login
@@ -64,6 +99,13 @@ jobs:
 
           echo "image=${image}" >> "${GITHUB_OUTPUT}"
 
+          {
+            echo ""
+            echo "## Builder image"
+            echo ""
+            echo "- Image: \`${image}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
       - name: Build Cubelet
         shell: bash
         run: |
@@ -75,10 +117,18 @@ jobs:
           test -x _output/bin/cubelet
           test -x _output/bin/cubecli
 
+          {
+            echo ""
+            echo "## Build output"
+            echo ""
+            echo "- \`_output/bin/cubelet\`"
+            echo "- \`_output/bin/cubecli\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
       - name: Upload Cubelet artifact
         uses: actions/upload-artifact@v4
         with:
-          name: cubelet-binaries-${{ github.sha }}
+          name: cubelet-binaries-${{ steps.target.outputs.safe_ref }}-${{ steps.target.outputs.short_sha }}
           path: |
             _output/bin/cubelet
             _output/bin/cubecli
