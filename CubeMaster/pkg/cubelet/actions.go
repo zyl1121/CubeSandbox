@@ -122,6 +122,21 @@ func GetLocalSnapshot(ctx context.Context, calleeEp string,
 	return c.GetLocalSnapshot(ctx, req)
 }
 
+func ExportTemplateRootfsArtifact(ctx context.Context, calleeEp string,
+	req *cubebox.ExportTemplateRootfsArtifactRequest) (cubebox.CubeboxMgr_ExportTemplateRootfsArtifactClient, func(), error) {
+	conn, err := grpcconn.GetWorkerConn(ctx, calleeEp)
+	if err != nil {
+		return nil, nil, ret.Err(errorcode.ErrorCode_ConnHostFailed, err.Error())
+	}
+	c := cubebox.NewCubeboxMgrClient(conn.Value())
+	stream, err := c.ExportTemplateRootfsArtifact(ctx, req)
+	if err != nil {
+		conn.Close()
+		return nil, nil, err
+	}
+	return stream, func() { conn.Close() }, nil
+}
+
 func GetStorageMetrics(ctx context.Context, calleeEp string,
 	req *cubebox.GetStorageMetricsRequest) (*cubebox.GetStorageMetricsResponse, error) {
 	conn, err := grpcconn.GetWorkerConn(ctx, calleeEp)

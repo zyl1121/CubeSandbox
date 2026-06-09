@@ -6,6 +6,7 @@ package templatecenter
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"runtime/debug"
@@ -40,7 +41,7 @@ const cleanupTemplateRPCTimeout = 1 * time.Minute
 // the JobPhase* set in template_image.go; they are referenced here without
 // re-declaration to avoid duplicate constants.
 
-func SubmitTemplateCommit(ctx context.Context, sandboxID, nodeID, nodeIP string, req *sandboxtypes.CreateCubeSandboxReq) (*sandboxtypes.TemplateImageJobInfo, error) {
+func SubmitTemplateCommit(ctx context.Context, sandboxID, nodeID, nodeIP string, req *sandboxtypes.CreateCubeSandboxReq, downloadBaseURL string) (*sandboxtypes.TemplateImageJobInfo, error) {
 	if !isReady() {
 		return nil, ErrTemplateStoreNotInitialized
 	}
@@ -159,12 +160,12 @@ func SubmitTemplateCommit(ctx context.Context, sandboxID, nodeID, nodeIP string,
 		"sandbox_id":      sandboxID,
 		"node_id":         nodeID,
 		"node_ip":         nodeIP,
-	}), jobID, sandboxID, nodeID, nodeIP, createReq, storedReq)
+	}), jobID, sandboxID, nodeID, nodeIP, createReq, storedReq, downloadBaseURL)
 
 	return GetTemplateImageJobInfo(ctx, jobID)
 }
 
-func runTemplateCommitJob(ctx context.Context, jobID, sandboxID, nodeID, nodeIP string, createReq, storedReq *sandboxtypes.CreateCubeSandboxReq) {
+func runTemplateCommitJob(ctx context.Context, jobID, sandboxID, nodeID, nodeIP string, createReq, storedReq *sandboxtypes.CreateCubeSandboxReq, downloadBaseURL string) {
 	templateID := createReq.Annotations[constants.CubeAnnotationAppSnapshotTemplateID]
 	logger := log.G(ctx).WithFields(map[string]any{
 		"job_id":      jobID,
@@ -173,6 +174,52 @@ func runTemplateCommitJob(ctx context.Context, jobID, sandboxID, nodeID, nodeIP 
 		"node_id":     nodeID,
 		"node_ip":     nodeIP,
 	})
+	requestSnapshot, requestSnapshotErr := marshalTemplateCommitJobRequest(storedReq)
+	if requestSnapshotErr != nil {
+		logger.Errorf("marshal template commit request snapshot fail: %v", requestSnapshotErr)
+		_ = updateTemplateImageJob(ctx, jobID, map[string]any{
+			"status":        JobStatusFailed,
+			"phase":         JobPhaseSnapshotting,
+			"progress":      100,
+			"error_message": requestSnapshotErr.Error(),
+		})
+		return
+	}
+	finishWithTemplateInfo := func(info *TemplateInfo, artifact *models.RootfsArtifact, expected, ready, failed int32) {
+		if info == nil {
+			_ = updateTemplateImageJob(ctx, jobID, map[string]any{
+				"status":        JobStatusFailed,
+				"phase":         JobPhaseRegistering,
+				"progress":      100,
+				"error_message": "template info is nil",
+			})
+			return
+		}
+		resultPayload, _ := json.Marshal(info)
+		jobStatus := JobStatusReady
+		jobPhase := JobPhaseReady
+		if info.Status == StatusFailed {
+			jobStatus = JobStatusFailed
+			jobPhase = JobPhaseRegistering
+		}
+		values := map[string]any{
+			"status":              jobStatus,
+			"phase":               jobPhase,
+			"progress":            100,
+			"expected_node_count": expected,
+			"ready_node_count":    ready,
+			"failed_node_count":   failed,
+			"template_status":     info.Status,
+			"result_json":         string(resultPayload),
+			"error_message":       info.LastError,
+		}
+		if artifact != nil {
+			values["artifact_id"] = artifact.ArtifactID
+			values["artifact_status"] = artifact.Status
+			values["template_spec_fingerprint"] = artifact.TemplateSpecFingerprint
+		}
+		_ = updateTemplateImageJob(ctx, jobID, values)
+	}
 	defer func() {
 		if r := recover(); r != nil {
 			stack := string(debug.Stack())
@@ -293,36 +340,165 @@ func runTemplateCommitJob(ctx context.Context, jobID, sandboxID, nodeID, nodeIP 
 		return
 	}
 	setTemplateLocalityCache(templateID, []ReplicaStatus{replica})
+	localcache.RegisterTemplateReplica(templateID, nodeID, 1)
 
-	templateStatus := StatusReady
-	expectedNodes := int32(localcache.GetHealthyNodesByInstanceType(-1, createReq.InstanceType).Len())
-	if expectedNodes > 1 {
-		templateStatus = StatusPartiallyReady
-	}
-	if err := UpdateDefinitionStatus(ctx, templateID, templateStatus, ""); err != nil {
-		cleanupOnFailure(err)
+	remoteTargets, err := resolveCommitRemoteTargets(createReq.InstanceType, createReq.DistributionScope, nodeID, nodeIP)
+	if err != nil {
+		if updateErr := UpdateDefinitionStatus(ctx, templateID, StatusPartiallyReady, err.Error()); updateErr != nil {
+			logger.Errorf("update template status after remote target resolution failure fail: %v", updateErr)
+			_ = updateTemplateImageJob(ctx, jobID, map[string]any{
+				"status":          JobStatusFailed,
+				"phase":           JobPhaseRegistering,
+				"progress":        100,
+				"template_status": StatusPartiallyReady,
+				"error_message":   errors.Join(err, updateErr).Error(),
+			})
+			return
+		}
+		info, infoErr := GetTemplateInfo(ctx, templateID)
+		if infoErr != nil {
+			_ = updateTemplateImageJob(ctx, jobID, map[string]any{
+				"status":          JobStatusFailed,
+				"phase":           JobPhaseRegistering,
+				"progress":        100,
+				"template_status": StatusPartiallyReady,
+				"error_message":   errors.Join(err, infoErr).Error(),
+			})
+			return
+		}
+		finishWithTemplateInfo(info, nil, 1, 1, 0)
+		logger.Warnf("template commit finished with origin-only readiness: %v", err)
 		return
 	}
 
-	localcache.RegisterTemplateReplica(templateID, nodeID, 1)
-	_ = updateTemplateImageJob(ctx, jobID, map[string]any{
-		"status":              JobStatusReady,
-		"phase":               JobPhaseRegistering,
-		"progress":            100,
+	expectedNodes := int32(1 + len(remoteTargets))
+	if len(remoteTargets) == 0 {
+		if err := UpdateDefinitionStatus(ctx, templateID, StatusReady, ""); err != nil {
+			_ = updateTemplateImageJob(ctx, jobID, map[string]any{
+				"status":          JobStatusFailed,
+				"phase":           JobPhaseRegistering,
+				"progress":        100,
+				"template_status": StatusReady,
+				"error_message":   err.Error(),
+			})
+			return
+		}
+		info, infoErr := GetTemplateInfo(ctx, templateID)
+		if infoErr != nil {
+			_ = updateTemplateImageJob(ctx, jobID, map[string]any{
+				"status":          JobStatusFailed,
+				"phase":           JobPhaseRegistering,
+				"progress":        100,
+				"template_status": StatusReady,
+				"error_message":   infoErr.Error(),
+			})
+			return
+		}
+		finishWithTemplateInfo(info, nil, expectedNodes, 1, 0)
+		logger.Infof("template commit job finished successfully on origin only")
+		return
+	}
+
+	if err := updateTemplateImageJob(ctx, jobID, map[string]any{
+		"phase":               JobPhaseDistributing,
+		"progress":            78,
 		"expected_node_count": expectedNodes,
 		"ready_node_count":    1,
-		"failed_node_count":   max(expectedNodes-1, 0),
-		"template_status":     templateStatus,
-		"error_message":       "",
-	})
-	logger.Infof("template commit job finished successfully")
-}
-
-func max(a, b int32) int32 {
-	if a > b {
-		return a
+		"failed_node_count":   0,
+	}); err != nil {
+		logger.Errorf("update commit distribution start fail: %v", err)
 	}
-	return b
+	artifact, generatedReq, err := pullAndRegisterCommittedRootfsArtifact(ctx, nodeIP, commitRsp, templateID, storedReq, requestSnapshot, downloadBaseURL)
+	if err != nil {
+		statusErr := UpdateDefinitionStatus(ctx, templateID, StatusPartiallyReady, err.Error())
+		persistErr := recordCommitDistributionFailure(ctx, templateID, createReq, remoteTargets, "", jobID, err)
+		refreshErr := refreshTemplateReplicaSummary(ctx, templateID)
+		info, infoErr := GetTemplateInfo(ctx, templateID)
+		if infoErr != nil {
+			err = errors.Join(err, statusErr, persistErr, refreshErr, infoErr)
+			_ = updateTemplateImageJob(ctx, jobID, map[string]any{
+				"status":          JobStatusFailed,
+				"phase":           JobPhaseDistributing,
+				"progress":        100,
+				"template_status": StatusPartiallyReady,
+				"artifact_status": ArtifactStatusFailed,
+				"error_message":   err.Error(),
+			})
+			return
+		}
+		readyCount, failedCount := countTemplateReplicaStates(info.Replicas)
+		if extraErr := errors.Join(err, statusErr, persistErr, refreshErr); extraErr != nil {
+			info.LastError = extraErr.Error()
+		}
+		finishWithTemplateInfo(info, artifact, expectedNodes, readyCount, failedCount)
+		logger.Warnf("template commit artifact registration failed; keeping origin replica: %v", err)
+		return
+	}
+	if err := updateTemplateImageJob(ctx, jobID, map[string]any{
+		"artifact_id":               artifact.ArtifactID,
+		"artifact_status":           artifact.Status,
+		"template_spec_fingerprint": artifact.TemplateSpecFingerprint,
+		"phase":                     JobPhaseDistributing,
+		"progress":                  84,
+	}); err != nil {
+		logger.Errorf("update commit artifact metadata fail: %v", err)
+	}
+	distReq := &sandboxtypes.CreateTemplateFromImageReq{
+		InstanceType:      createReq.InstanceType,
+		DistributionScope: createReq.DistributionScope,
+		WritableLayerSize: artifact.WritableLayerSize,
+	}
+	readyTargets, _, readyRemote, failedRemote, distErr := distributeRootfsArtifact(ctx, distReq, generatedReq, artifact, templateID, jobID)
+	if err := updateTemplateImageJob(ctx, jobID, map[string]any{
+		"phase":               JobPhaseRegistering,
+		"progress":            90,
+		"expected_node_count": expectedNodes,
+		"ready_node_count":    1 + readyRemote,
+		"failed_node_count":   failedRemote,
+		"artifact_status":     artifact.Status,
+		"error_message":       errorString(distErr),
+	}); err != nil {
+		logger.Errorf("update commit distribution result fail: %v", err)
+	}
+	_, persistErr := createTemplateReplicasOnNodes(ctx, templateID, generatedReq, readyTargets, replicaRunOptions{
+		ArtifactID: artifact.ArtifactID,
+		JobID:      jobID,
+	})
+	if persistErr != nil {
+		logger.Errorf("create remote template replicas fail: %v", persistErr)
+	}
+	if err := refreshTemplateReplicaSummary(ctx, templateID); err != nil {
+		_ = updateTemplateImageJob(ctx, jobID, map[string]any{
+			"status":          JobStatusFailed,
+			"phase":           JobPhaseRegistering,
+			"progress":        100,
+			"template_status": StatusPartiallyReady,
+			"artifact_id":     artifact.ArtifactID,
+			"artifact_status": artifact.Status,
+			"error_message":   errors.Join(distErr, persistErr, err).Error(),
+		})
+		return
+	}
+	info, err := GetTemplateInfo(ctx, templateID)
+	if err != nil {
+		_ = updateTemplateImageJob(ctx, jobID, map[string]any{
+			"status":          JobStatusFailed,
+			"phase":           JobPhaseRegistering,
+			"progress":        100,
+			"template_status": StatusPartiallyReady,
+			"artifact_id":     artifact.ArtifactID,
+			"artifact_status": artifact.Status,
+			"error_message":   errors.Join(distErr, persistErr, err).Error(),
+		})
+		return
+	}
+	readyCount, failedCount := countTemplateReplicaStates(info.Replicas)
+	finishWithTemplateInfo(info, artifact, expectedNodes, readyCount, failedCount)
+	if distErr != nil || persistErr != nil {
+		logger.Warnf("template commit finished partially ready: distributionErr=%v persistErr=%v", distErr, persistErr)
+		return
+	}
+	logger.Infof("template commit job finished successfully")
 }
 
 // buildCommitFailureMessage produces a never-empty error message for the failure

@@ -170,7 +170,7 @@ func TestSubmitTemplateCommitRejectsEmptyRequestID(t *testing.T) {
 		},
 	}
 	for _, tc := range tests {
-		_, err := SubmitTemplateCommit(context.Background(), "sb-1", "node-a", "10.0.0.1", tc.req)
+		_, err := SubmitTemplateCommit(context.Background(), "sb-1", "node-a", "10.0.0.1", tc.req, "http://127.0.0.1:3000")
 		if err == nil || !strings.Contains(err.Error(), "requestID is required") {
 			t.Fatalf("%s: expected requestID guard error, got %v", tc.name, err)
 		}

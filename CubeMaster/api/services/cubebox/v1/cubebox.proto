@@ -38,6 +38,10 @@ service CubeboxMgr {
   // GetLocalSnapshot returns the physical catalog entry for a single snapshot
   // by snapshot id. Returns PreConditionFailed when no local record exists.
   rpc GetLocalSnapshot(GetLocalSnapshotRequest) returns (GetLocalSnapshotResponse);
+  // ExportTemplateRootfsArtifact streams the committed rootfs ext4 bytes for a
+  // locally committed template so master can register and distribute it as a
+  // normal RootfsArtifact.
+  rpc ExportTemplateRootfsArtifact(ExportTemplateRootfsArtifactRequest) returns (stream ExportTemplateRootfsArtifactChunk);
   // GetStorageMetrics returns node-local cubecow storage metrics.
   rpc GetStorageMetrics(GetStorageMetricsRequest) returns (GetStorageMetricsResponse);
   // InspectStorageVolumes lists every sandbox storage record cubelet owns and
@@ -1027,6 +1031,32 @@ message GetLocalSnapshotResponse {
   cubelet.services.errorcode.v1.Ret ret = 2;
   // Catalog entry. Nil/empty when not found.
   LocalSnapshotInfo snapshot = 3;
+}
+
+message ExportTemplateRootfsArtifactRequest {
+  // requestID reqID
+  string requestID = 1;
+  // Logical template ID to export.
+  string templateID = 2;
+  // Fallback rootfs volume name when the local catalog is missing/incomplete.
+  string rootfsVol = 3;
+  // Fallback rootfs kind when the local catalog is missing/incomplete.
+  string rootfsKind = 4;
+  // Expected rootfs size in bytes.
+  uint64 rootfsSizeBytes = 5;
+}
+
+message ExportTemplateRootfsArtifactChunk {
+  // requestID reqID
+  string requestID = 1;
+  // Ret.
+  cubelet.services.errorcode.v1.Ret ret = 2;
+  // Logical template ID being exported.
+  string templateID = 3;
+  // Rootfs size in bytes.
+  uint64 rootfsSizeBytes = 4;
+  // Raw ext4 bytes.
+  bytes content = 5;
 }
 
 message GetStorageMetricsRequest {

@@ -130,7 +130,7 @@ func handleSandboxCommitAction(w http.ResponseWriter, r *http.Request, rt *CubeL
 		"SandboxID":   req.SandboxID,
 		"SandboxHost": hostIP,
 	}))
-	job, err := templatecenter.SubmitTemplateCommit(ctx, req.SandboxID, hostID, hostIP, req.CreateRequest)
+	job, err := templatecenter.SubmitTemplateCommit(ctx, req.SandboxID, hostID, hostIP, req.CreateRequest, requestBaseURL(r))
 	if err != nil {
 		code := commitTemplateErrorCode(err)
 		rt.RetCode = int64(code)
