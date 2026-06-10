@@ -160,4 +160,14 @@ Restart the services:
 sudo /usr/local/services/cubetoolbox/scripts/one-click/up-with-deps.sh
 ```
 
+For future reinstallations or when adding compute nodes, consider setting `CUBE_SANDBOX_NETWORK_CIDR` before running `install.sh` or `install-compute.sh`. Use a CIDR that does not overlap with the host LAN, and keep the same value across all nodes:
+
+```bash
+CUBE_SANDBOX_NETWORK_CIDR=<non-overlapping-cidr> ./install.sh
+# or
+CUBE_SANDBOX_NETWORK_CIDR=<non-overlapping-cidr> ./install-compute.sh
+```
+
+See [Self-Build Deployment — Configuration Reference](../self-build-deploy.md#configuration-reference) for the full one-click environment variable reference.
+
 After the sandbox CIDR no longer overlaps with the host LAN, recreate the template. The template creation should complete successfully.

@@ -160,4 +160,14 @@ sudo ip link delete cube-dev
 sudo /usr/local/services/cubetoolbox/scripts/one-click/up-with-deps.sh
 ```
 
+后续重新安装或扩展计算节点时，可以在执行 `install.sh` 或 `install-compute.sh` 前设置 `CUBE_SANDBOX_NETWORK_CIDR`。该 CIDR 不能和宿主机局域网冲突，并且所有节点需要保持一致：
+
+```bash
+CUBE_SANDBOX_NETWORK_CIDR=<不冲突的CIDR> ./install.sh
+# 或
+CUBE_SANDBOX_NETWORK_CIDR=<不冲突的CIDR> ./install-compute.sh
+```
+
+完整 one-click 环境变量说明请参阅[自构建部署 — 配置参考](../self-build-deploy.md#配置参考)。
+
 网段不再和宿主机局域网重叠后，重新创建模板，成功。

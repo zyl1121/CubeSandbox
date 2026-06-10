@@ -544,11 +544,29 @@ else
   log "primary network interface not detected; keeping packaged Cubelet eth_name"
 fi
 
-# Validate cubevs CIDR from env var (if set)
+PACKAGE_TAR="${ONE_CLICK_PACKAGE_TAR:-${SCRIPT_DIR}/assets/package/sandbox-package.tar.gz}"
+WORK_DIR="$(mktemp -d)"
+trap 'rm -rf "${WORK_DIR}"' EXIT
+
+require_cmd tar
+ensure_file "${PACKAGE_TAR}"
+
+log "extracting package ${PACKAGE_TAR}"
+tar -xzf "${PACKAGE_TAR}" -C "${WORK_DIR}"
+PKG_ROOT="${WORK_DIR}/sandbox-package"
+ensure_dir "${PKG_ROOT}"
+
+# Validate the effective cubevs CIDR before installing packages or replacing
+# the existing deployment. When the env var is unset, use the packaged Cubelet
+# config value so the default CIDR is checked too.
+CUBELET_PACKAGE_CONFIG="${PKG_ROOT}/Cubelet/config/config.toml"
 CUBE_SANDBOX_NETWORK_CIDR="${CUBE_SANDBOX_NETWORK_CIDR:-}"
 if [[ -n "${CUBE_SANDBOX_NETWORK_CIDR}" ]]; then
-  check_cidr_preflight "${CUBE_SANDBOX_NETWORK_CIDR}"
+  check_cidr_preflight "${CUBE_SANDBOX_NETWORK_CIDR}" "CUBE_SANDBOX_NETWORK_CIDR"
   export CUBE_SANDBOX_NETWORK_CIDR
+else
+  CUBE_SANDBOX_EFFECTIVE_NETWORK_CIDR="$(cubelet_network_cidr_from_config "${CUBELET_PACKAGE_CONFIG}")"
+  check_cidr_preflight "${CUBE_SANDBOX_EFFECTIVE_NETWORK_CIDR}" "Cubelet config cidr"
 fi
 
 install_required_dependencies
@@ -557,17 +575,7 @@ if needs_docker_for_install; then
   configure_tencent_docker_mirror
 fi
 
-PACKAGE_TAR="${ONE_CLICK_PACKAGE_TAR:-${SCRIPT_DIR}/assets/package/sandbox-package.tar.gz}"
-WORK_DIR="$(mktemp -d)"
-trap 'rm -rf "${WORK_DIR}"' EXIT
-
-ensure_file "${PACKAGE_TAR}"
 validate_declared_release_manifest "${SCRIPT_DIR}"
-
-log "extracting package ${PACKAGE_TAR}"
-tar -xzf "${PACKAGE_TAR}" -C "${WORK_DIR}"
-PKG_ROOT="${WORK_DIR}/sandbox-package"
-ensure_dir "${PKG_ROOT}"
 validate_cubelet_cow_startup_deps "${PKG_ROOT}/Cubelet/config/config.toml"
 
 installed_role="${DEPLOY_ROLE}"
