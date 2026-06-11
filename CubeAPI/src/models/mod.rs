@@ -100,7 +100,11 @@ pub struct NewSandbox {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<SandboxMetadata>,
 
-    #[serde(alias = "envs", rename = "envVars", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        alias = "envs",
+        rename = "envVars",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub env_vars: Option<EnvVars>,
 
     #[serde(skip_serializing_if = "Option::is_none")]

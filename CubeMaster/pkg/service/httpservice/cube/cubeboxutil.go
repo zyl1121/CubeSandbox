@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -71,6 +72,7 @@ func dealCubeboxReqTemplateByLocalConfig(ctx context.Context, reqInOut *types.Cr
 			return err
 		}
 	}
+	applyRequestEnvVarsToFirstContainer(reqInOut)
 
 	applyTemplateAnnotationsAndLabels(templateReq, reqInOut)
 	reqInOut.CubeVSContext = mergeCubeVSContexts(templateReq.CubeVSContext, reqInOut.CubeVSContext)
@@ -147,6 +149,56 @@ func applyTemplateToContainer(ctr *types.Container, templateCtr *types.Container
 	}
 
 	return nil
+}
+
+func applyRequestEnvVarsToFirstContainer(req *types.CreateCubeSandboxReq) {
+	if req == nil || len(req.EnvVars) == 0 || len(req.Containers) == 0 {
+		return
+	}
+	container := req.Containers[0]
+	if container == nil {
+		container = &types.Container{}
+		req.Containers[0] = container
+	}
+
+	keys := make([]string, 0, len(req.EnvVars))
+	for key := range req.EnvVars {
+		if strings.TrimSpace(key) == "" {
+			continue
+		}
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	orderedKeys := make([]string, 0, len(container.Envs)+len(keys))
+	valuesByKey := make(map[string]string, len(container.Envs)+len(keys))
+	seenKeys := make(map[string]struct{}, len(container.Envs)+len(keys))
+	for _, env := range container.Envs {
+		if env == nil || strings.TrimSpace(env.Key) == "" {
+			continue
+		}
+		if _, seen := seenKeys[env.Key]; !seen {
+			orderedKeys = append(orderedKeys, env.Key)
+			seenKeys[env.Key] = struct{}{}
+		}
+		valuesByKey[env.Key] = env.Value
+	}
+	for _, key := range keys {
+		if _, seen := seenKeys[key]; !seen {
+			orderedKeys = append(orderedKeys, key)
+			seenKeys[key] = struct{}{}
+		}
+		valuesByKey[key] = req.EnvVars[key]
+	}
+	mergedEnvs := make([]*types.KeyValue, 0, len(orderedKeys))
+	for _, key := range orderedKeys {
+		mergedEnvs = append(mergedEnvs, &types.KeyValue{
+			Key:   key,
+			Value: valuesByKey[key],
+		})
+	}
+	container.Envs = mergedEnvs
+	req.EnvVars = nil
 }
 
 func applyTemplateVolumeMounts(templateCtr *types.Container, ctr *types.Container) {
@@ -431,6 +483,7 @@ func dealCubeboxCreateReqWithTemplateCenter(ctx context.Context, templateID stri
 			return err
 		}
 	}
+	applyRequestEnvVarsToFirstContainer(reqInOut)
 
 	if templateReq.NetworkType != "" {
 		reqInOut.NetworkType = templateReq.NetworkType

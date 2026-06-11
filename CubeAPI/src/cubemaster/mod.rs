@@ -33,6 +33,8 @@ use serde::de::Deserializer;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+use crate::models::EnvVars;
+
 const TEMPLATE_ID_LABEL_KEY: &str = "cube.master.appsnapshot.template.id";
 
 // ─── Client ────────────────────────────────────────────────────────────────
@@ -604,6 +606,8 @@ pub struct CreateSandboxRequest {
     pub timeout: Option<i32>,
 
     pub containers: Vec<ContainerSpec>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub env_vars: Option<EnvVars>,
     pub annotations: HashMap<String, String>,
 
     #[serde(skip_serializing_if = "Option::is_none")]

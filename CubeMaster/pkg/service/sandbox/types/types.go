@@ -42,7 +42,8 @@ type CreateCubeSandboxReq struct {
 	Volumes       []*Volume      `json:"volumes,omitempty"`
 	CubeVSContext *CubeVSContext `json:"cubevs_context,omitempty"`
 
-	Containers []*Container `json:"containers,omitempty"`
+	Containers []*Container      `json:"containers,omitempty"`
+	EnvVars    map[string]string `json:"env_vars,omitempty"`
 
 	Annotations       map[string]string `json:"annotations,omitempty" `
 	Labels            map[string]string `json:"labels,omitempty" `

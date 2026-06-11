@@ -10,9 +10,9 @@ use crate::{
     constants::ENVD_VERSION,
     cubemaster::{
         datetime_from_unix_nanos, extract_template_id, CreateSandboxRequest, CubeMasterClient,
-        CubeMasterError, CubeVSContext, ContainerSpec, DeleteSandboxRequest, EnvVar, ImageSpec,
-        ListSandboxRequest, SandboxInfo, SandboxLogsRequest, SandboxRefreshRequest, SandboxStatus,
-        SandboxTimeoutRequest, SandboxUpdateRequest,
+        CubeMasterError, CubeVSContext, DeleteSandboxRequest, ListSandboxRequest, SandboxInfo,
+        SandboxLogsRequest, SandboxRefreshRequest, SandboxStatus, SandboxTimeoutRequest,
+        SandboxUpdateRequest,
     },
     error::{AppError, AppResult},
     models::{
@@ -132,16 +132,15 @@ impl SandboxService {
             }
             meta
         });
-        let containers = build_env_override_containers(body.env_vars);
-
         let req = CreateSandboxRequest {
             request_id: new_request_id(),
             instance_type: self.instance_type.clone(),
             timeout: Some(body.timeout),
+            env_vars: body.env_vars,
             annotations,
             labels,
             volumes: None,
-            containers,
+            containers: vec![],
             exposed_ports: vec![],
             network_type: Some("tap".to_string()),
             cubevs_context: build_cubevs_context(body.allow_internet_access, body.network.as_ref()),
@@ -632,50 +631,11 @@ pub(crate) fn build_cubevs_context(
     })
 }
 
-fn build_env_override_containers(env_vars: Option<crate::models::EnvVars>) -> Vec<ContainerSpec> {
-    let Some(env_vars) = env_vars else {
-        return Vec::new();
-    };
-    if env_vars.is_empty() {
-        return Vec::new();
-    }
-
-    // CubeMaster merges request containers into the template container list.
-    // Keep one minimal container here so envs can flow through that merge.
-    let mut envs: Vec<EnvVar> = env_vars
-        .into_iter()
-        .map(|(key, value)| EnvVar { key, value })
-        .collect();
-    envs.sort_by(|a, b| a.key.cmp(&b.key));
-
-    vec![ContainerSpec {
-        name: None,
-        image: ImageSpec {
-            image: String::new(),
-            storage_media: None,
-        },
-        command: None,
-        args: None,
-        working_dir: None,
-        resources: None,
-        envs: Some(envs),
-        volume_mounts: None,
-        dns_config: None,
-        r_limit: None,
-        security_context: None,
-        probe: None,
-        annotations: None,
-    }]
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
 
-    use super::{
-        build_cubevs_context, build_env_override_containers, filter_by_metadata,
-        from_cubemaster_info,
-    };
+    use super::{build_cubevs_context, filter_by_metadata, from_cubemaster_info};
     use crate::cubemaster::{ListSandboxResponse, SandboxInfo};
     use crate::models::{NewSandbox, SandboxNetworkConfig, SandboxState};
 
@@ -766,24 +726,6 @@ mod tests {
     }
 
     #[test]
-    fn build_env_override_containers_maps_envs_into_single_override_container() {
-        let containers = build_env_override_containers(Some(HashMap::from([
-            ("Z_KEY".to_string(), "last".to_string()),
-            ("A_KEY".to_string(), "first".to_string()),
-        ])));
-
-        assert_eq!(containers.len(), 1);
-        let container = &containers[0];
-        assert_eq!(container.image.image, "");
-        let envs = container.envs.as_ref().expect("envs should exist");
-        assert_eq!(envs.len(), 2);
-        assert_eq!(envs[0].key, "A_KEY");
-        assert_eq!(envs[0].value, "first");
-        assert_eq!(envs[1].key, "Z_KEY");
-        assert_eq!(envs[1].value, "last");
-    }
-
-    #[test]
     fn new_sandbox_accepts_envs_alias() {
         let body: NewSandbox = serde_json::from_str(
             r#"{
@@ -794,7 +736,9 @@ mod tests {
         .expect("body should deserialize");
 
         assert_eq!(
-            body.env_vars.as_ref().and_then(|envs| envs.get("CUBE_TEST_ENV")),
+            body.env_vars
+                .as_ref()
+                .and_then(|envs| envs.get("CUBE_TEST_ENV")),
             Some(&"hello".to_string())
         );
     }
