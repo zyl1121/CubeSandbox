@@ -213,6 +213,106 @@ func TestWaitForNetworkAgentReadyRetriesUntilSuccess(t *testing.T) {
 	}
 }
 
+func TestShouldAppendDNSAllowOut(t *testing.T) {
+	block := false
+	allow := true
+	host := "api.example.com:443"
+	sni := "*.example.com"
+
+	tests := []struct {
+		name string
+		cfg  *networkagentclient.CubeNetworkConfig
+		want bool
+	}{
+		{
+			name: "nil config",
+			want: false,
+		},
+		{
+			name: "allow_out domain with disabled internet access",
+			cfg: &networkagentclient.CubeNetworkConfig{
+				AllowInternetAccess: &block,
+				AllowOut:            []string{"172.67.0.0/16", "api.example.com"},
+			},
+			want: true,
+		},
+		{
+			name: "allow_out domain with open internet access",
+			cfg: &networkagentclient.CubeNetworkConfig{
+				AllowInternetAccess: &allow,
+				AllowOut:            []string{"api.example.com"},
+			},
+			want: true,
+		},
+		{
+			name: "allow_out domain with default internet access",
+			cfg: &networkagentclient.CubeNetworkConfig{
+				AllowOut: []string{"api.example.com"},
+			},
+			want: true,
+		},
+		{
+			name: "l7 host domain with disabled internet access",
+			cfg: &networkagentclient.CubeNetworkConfig{
+				AllowInternetAccess: &block,
+				Rules: []*networkagentclient.EgressRule{
+					{Match: &networkagentclient.EgressRuleMatch{Host: &host}},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "l7 sni wildcard domain with disabled internet access",
+			cfg: &networkagentclient.CubeNetworkConfig{
+				AllowInternetAccess: &block,
+				Rules: []*networkagentclient.EgressRule{
+					{Match: &networkagentclient.EgressRuleMatch{SNI: &sni}},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "l7 host domain with default internet access",
+			cfg: &networkagentclient.CubeNetworkConfig{
+				Rules: []*networkagentclient.EgressRule{
+					{Match: &networkagentclient.EgressRuleMatch{Host: &host}},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "disabled internet access without domain target",
+			cfg: &networkagentclient.CubeNetworkConfig{
+				AllowInternetAccess: &block,
+				AllowOut:            []string{"172.67.0.0/16"},
+			},
+			want: false,
+		},
+		{
+			name: "default internet access without domain target",
+			cfg: &networkagentclient.CubeNetworkConfig{
+				AllowOut: []string{"172.67.0.0/16"},
+			},
+			want: false,
+		},
+		{
+			name: "open internet without domain target",
+			cfg: &networkagentclient.CubeNetworkConfig{
+				AllowInternetAccess: &allow,
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := shouldAppendDNSAllowOut(tt.cfg); got != tt.want {
+				t.Fatalf("shouldAppendDNSAllowOut()=%v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestMergeDNSAllowOutCIDRsForAllowOutDomain(t *testing.T) {
 	block := false
 	cfg := &networkagentclient.CubeNetworkConfig{
@@ -220,7 +320,7 @@ func TestMergeDNSAllowOutCIDRsForAllowOutDomain(t *testing.T) {
 		AllowOut:            []string{"172.67.0.0/16", "api.example.com"},
 	}
 
-	got, dnsCIDRs := mergeDNSAllowOutCIDRs(cfg, []string{"1.1.1.1", "2001:4860:4860::8888", "1.1.1.1"})
+	got, dnsCIDRs := mergeDNSAllowOutCIDRs(context.Background(), cfg, []string{"1.1.1.1", "2001:4860:4860::8888", "1.1.1.1"})
 	if got == nil {
 		t.Fatal("mergeDNSAllowOutCIDRs returned nil config")
 	}
@@ -233,16 +333,16 @@ func TestMergeDNSAllowOutCIDRsForAllowOutDomain(t *testing.T) {
 	}
 }
 
-func TestMergeDNSAllowOutCIDRsSkipsDisabledInternetAccess(t *testing.T) {
+func TestMergeDNSAllowOutCIDRsSkipsWithoutDomainAllow(t *testing.T) {
 	block := false
 	cfg := &networkagentclient.CubeNetworkConfig{
 		AllowInternetAccess: &block,
 		DenyOut:             []string{"0.0.0.0/0"},
 	}
 
-	got, dnsCIDRs := mergeDNSAllowOutCIDRs(cfg, []string{"1.1.1.1"})
+	got, dnsCIDRs := mergeDNSAllowOutCIDRs(context.Background(), cfg, []string{"1.1.1.1"})
 	if got != cfg {
-		t.Fatal("expected original config to be reused when internet access is disabled")
+		t.Fatal("expected original config to be reused when no domain is allowed")
 	}
 	if len(dnsCIDRs) != 0 {
 		t.Fatalf("dnsCIDRs=%v, want empty", dnsCIDRs)
@@ -263,7 +363,7 @@ func TestMergeDNSAllowOutCIDRsForL7DomainRule(t *testing.T) {
 		},
 	}
 
-	got, dnsCIDRs := mergeDNSAllowOutCIDRs(cfg, []string{"8.8.8.8"})
+	got, dnsCIDRs := mergeDNSAllowOutCIDRs(context.Background(), cfg, []string{"8.8.8.8"})
 	if got == nil {
 		t.Fatal("mergeDNSAllowOutCIDRs returned nil config")
 	}
@@ -276,19 +376,28 @@ func TestMergeDNSAllowOutCIDRsForL7DomainRule(t *testing.T) {
 	}
 }
 
-func TestMergeDNSAllowOutCIDRsSkipsWithoutDomainAllow(t *testing.T) {
+func TestMergeDNSAllowOutCIDRsForL7WildcardRules(t *testing.T) {
 	block := false
+	host := "*.moonshot.cn"
+	sni := "*.example.com"
 	cfg := &networkagentclient.CubeNetworkConfig{
 		AllowInternetAccess: &block,
-		AllowOut:            []string{"172.67.0.0/16"},
+		Rules: []*networkagentclient.EgressRule{
+			{Match: &networkagentclient.EgressRuleMatch{Host: &host}},
+			{Match: &networkagentclient.EgressRuleMatch{SNI: &sni}},
+		},
 	}
 
-	got, dnsCIDRs := mergeDNSAllowOutCIDRs(cfg, []string{"1.1.1.1"})
-	if got != cfg {
-		t.Fatal("expected original config to be reused when no domain is allowed")
+	got, dnsCIDRs := mergeDNSAllowOutCIDRs(context.Background(), cfg, []string{"119.29.29.29"})
+	if got == nil {
+		t.Fatal("mergeDNSAllowOutCIDRs returned nil config")
 	}
-	if len(dnsCIDRs) != 0 {
-		t.Fatalf("dnsCIDRs=%v, want empty", dnsCIDRs)
+	if len(dnsCIDRs) != 1 || dnsCIDRs[0] != "119.29.29.29/32" {
+		t.Fatalf("dnsCIDRs=%v, want [119.29.29.29/32]", dnsCIDRs)
+	}
+	wantAllowOut := []string{"119.29.29.29/32"}
+	if strings.Join(got.AllowOut, ",") != strings.Join(wantAllowOut, ",") {
+		t.Fatalf("AllowOut=%v, want %v", got.AllowOut, wantAllowOut)
 	}
 }
 
@@ -296,11 +405,46 @@ func TestMergeDNSAllowOutCIDRsSkipsOpenInternetContext(t *testing.T) {
 	allow := true
 	cfg := &networkagentclient.CubeNetworkConfig{AllowInternetAccess: &allow}
 
-	got, dnsCIDRs := mergeDNSAllowOutCIDRs(cfg, []string{"1.1.1.1"})
+	got, dnsCIDRs := mergeDNSAllowOutCIDRs(context.Background(), cfg, []string{"1.1.1.1"})
 	if got != cfg {
 		t.Fatal("expected original config to be reused for open internet access")
 	}
 	if len(dnsCIDRs) != 0 {
 		t.Fatalf("dnsCIDRs=%v, want empty", dnsCIDRs)
+	}
+}
+
+func TestDNSServerToCIDR(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+		ok   bool
+	}{
+		{name: "ipv4", in: "1.1.1.1", want: "1.1.1.1/32", ok: true},
+		{name: "trimmed ipv4", in: " 8.8.8.8 ", want: "8.8.8.8/32", ok: true},
+		{name: "ipv6 unsupported by cubevs allow_out", in: "2001:4860:4860::8888", ok: false},
+		{name: "invalid", in: "not-an-ip", ok: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := dnsServerToCIDR(tt.in)
+			if ok != tt.ok || got != tt.want {
+				t.Fatalf("dnsServerToCIDR(%q)=(%q, %v), want (%q, %v)", tt.in, got, ok, tt.want, tt.ok)
+			}
+		})
+	}
+}
+
+func TestIsIPv6DNSServer(t *testing.T) {
+	if !isIPv6DNSServer("2001:4860:4860::8888") {
+		t.Fatal("expected IPv6 DNS server to be detected")
+	}
+	if isIPv6DNSServer("1.1.1.1") {
+		t.Fatal("did not expect IPv4 DNS server to be detected as IPv6")
+	}
+	if isIPv6DNSServer("not-an-ip") {
+		t.Fatal("did not expect invalid DNS server to be detected as IPv6")
 	}
 }
