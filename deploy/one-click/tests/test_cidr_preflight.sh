@@ -45,6 +45,14 @@ assert_occurrence_count() {
   [[ "${count}" == "${expected}" ]] || fail "expected ${needle} to appear ${expected} times; got ${count}: ${text}"
 }
 
+assert_not_contains_text() {
+  local text="$1"
+  local needle="$2"
+  if grep -Fq -- "${needle}" <<<"${text}"; then
+    fail "expected text not to contain ${needle}; got: ${text}"
+  fi
+}
+
 line_number() {
   local path="$1"
   local needle="$2"
@@ -103,6 +111,14 @@ ip() {
             "${TEST_CUBE_ROUTE_CIDR:?}" \
             "${TEST_CUBE_DEV_IP:?}"
           printf '%s dev z%s scope link\n' "${TEST_TAP_ROUTE_CIDR:?}" "${TEST_TAP_IP:?}"
+          ;;
+        cube_route_then_plain)
+          printf '%s dev cube-dev proto static scope link src %s\n' \
+            "${TEST_CUBE_ROUTE_CIDR:?}" \
+            "${TEST_CUBE_DEV_IP:?}"
+          printf '%s proto static scope link src %s\n' \
+            "${TEST_PLAIN_ROUTE_CIDR:?}" \
+            "${TEST_PLAIN_ROUTE_SRC_IP:?}"
           ;;
         *)
           ;;
@@ -186,6 +202,78 @@ test_dedupes_equivalent_resolver_paths() {
   assert_occurrence_count "${output}" "nameserver ${nameserver}" 1
 }
 
+test_does_not_leak_route_iface_across_iterations() {
+  local cidr="10.77.0.0/16"
+  local cube_route_cidr="10.77.0.0/24"
+  local cube_dev_ip="10.77.0.1"
+  local plain_route_cidr="10.77.2.0/24"
+  local plain_route_src_ip="10.77.2.123"
+  local output
+
+  if output="$(
+    TEST_CUBE_ROUTE_CIDR="${cube_route_cidr}" \
+    TEST_CUBE_DEV_IP="${cube_dev_ip}" \
+    TEST_PLAIN_ROUTE_CIDR="${plain_route_cidr}" \
+    TEST_PLAIN_ROUTE_SRC_IP="${plain_route_src_ip}" \
+    IP_SCENARIO=cube_route_then_plain \
+    check_cidr_preflight "${cidr}" "Cubelet config cidr" 2>&1
+  )"; then
+    fail "expected plain route conflict to be detected after cube-owned route"
+  fi
+  assert_contains_text "${output}" "ignored 1 existing Cube-owned network entries during CIDR conflict check"
+  assert_contains_text "${output}" "route ${plain_route_cidr}"
+}
+
+test_accepts_empty_cidr() {
+  IP_SCENARIO=host_iface_conflict check_cidr_preflight "" "Cubelet config cidr" >/dev/null 2>&1
+}
+
+test_bypass_still_rejects_malformed_cidr() {
+  local output
+  if output="$(
+    CUBE_SANDBOX_NETWORK_CIDR_SKIP_CONFLICT_CHECK=1 \
+    IP_SCENARIO=empty \
+    check_cidr_preflight "10.77.1.99/24" "CUBE_SANDBOX_NETWORK_CIDR" 2>&1
+  )"; then
+    fail "expected malformed CIDR to be rejected even with bypass enabled"
+  fi
+  assert_contains_text "${output}" "Did you mean: 10.77.1.0/24?"
+  assert_not_contains_text "${output}" "conflict check SKIPPED"
+}
+
+test_bypass_skips_conflict_detection() {
+  local output
+  if ! output="$(
+    CUBE_SANDBOX_NETWORK_CIDR_SKIP_CONFLICT_CHECK=1 \
+    IP_SCENARIO=host_iface_conflict \
+    TEST_HOST_IFACE_CIDR="10.77.1.123/24" \
+    TEST_HOST_IFACE_BROADCAST="10.77.1.255" \
+    check_cidr_preflight "10.77.0.0/16" "Cubelet config cidr" 2>&1
+  )"; then
+    fail "expected bypass to skip conflict detection for a valid CIDR"
+  fi
+  assert_contains_text "${output}" "CUBE_SANDBOX_NETWORK_CIDR conflict check SKIPPED (bypass flag set)"
+  assert_not_contains_text "${output}" "conflicts with existing host network"
+}
+
+test_accepts_cidr_mask_boundaries() {
+  IP_SCENARIO=empty check_cidr_preflight "10.0.0.0/8" "Cubelet config cidr" >/dev/null 2>&1
+  IP_SCENARIO=empty check_cidr_preflight "10.77.1.0/30" "Cubelet config cidr" >/dev/null 2>&1
+}
+
+test_rejects_cidr_mask_outside_boundaries() {
+  local output
+  if output="$(IP_SCENARIO=empty check_cidr_preflight "10.0.0.0/31" "Cubelet config cidr" 2>&1)"; then
+    fail "expected /31 to be rejected"
+  fi
+  assert_contains_text "${output}" "mask must be between 8 and 30"
+
+  if output="$(IP_SCENARIO=empty check_cidr_preflight "10.0.0.0/32" "Cubelet config cidr" 2>&1)"; then
+    fail "expected /32 to be rejected"
+  fi
+  assert_contains_text "${output}" "mask must be between 8 and 30"
+}
+
 test_ignores_cube_owned_networks() {
   local cidr="10.77.0.0/16"
   local cube_dev_cidr="10.77.0.1/16"
@@ -241,6 +329,18 @@ EOF
   [[ "${cidr}" == "172.31.64.0/18" ]] || fail "expected 172.31.64.0/18, got ${cidr}"
 }
 
+test_reads_network_cidr_from_single_quoted_config() {
+  local config="${TMP_DIR}/single-quoted-config.toml"
+  cat >"${config}" <<'EOF'
+[plugins."io.cubelet.internal.v1.network"]
+  cidr = '172.31.64.0/18' # inline comment
+EOF
+
+  local cidr
+  cidr="$(cubelet_network_cidr_from_config "${config}")"
+  [[ "${cidr}" == "172.31.64.0/18" ]] || fail "expected 172.31.64.0/18, got ${cidr}"
+}
+
 test_install_wires_effective_cidr_preflight_before_mutations() {
   local install_script="${ONE_CLICK_DIR}/install.sh"
 
@@ -258,10 +358,17 @@ test_rejects_host_interface_overlap
 test_rejects_host_route_overlap
 test_rejects_nameserver_overlap
 test_dedupes_equivalent_resolver_paths
+test_does_not_leak_route_iface_across_iterations
+test_accepts_empty_cidr
+test_bypass_still_rejects_malformed_cidr
+test_bypass_skips_conflict_detection
+test_accepts_cidr_mask_boundaries
+test_rejects_cidr_mask_outside_boundaries
 test_ignores_cube_owned_networks
 test_cube_owned_netdev_matching_is_narrow
 test_rejects_invalid_cidr
 test_reads_network_cidr_from_cubelet_config
+test_reads_network_cidr_from_single_quoted_config
 test_install_wires_effective_cidr_preflight_before_mutations
 
 echo "cidr preflight tests OK"

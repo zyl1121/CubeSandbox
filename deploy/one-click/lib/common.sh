@@ -159,10 +159,20 @@ cubelet_network_cidr_from_config() {
     }
     in_network && /^[[:space:]]*cidr[[:space:]]*=/ {
       line = $0
-      sub(/^[^"]*"/, "", line)
-      sub(/".*$/, "", line)
-      print line
-      exit
+      quote = sprintf("%c", 39)
+      sub(/^[^=]*=[[:space:]]*/, "", line)
+      if (line ~ /^"/) {
+        sub(/^"/, "", line)
+        sub(/".*$/, "", line)
+        print line
+        exit
+      }
+      if (line ~ ("^" quote)) {
+        sub(("^" quote), "", line)
+        sub((quote ".*$"), "", line)
+        print line
+        exit
+      }
     }
   ' "${config_path}")"
 
@@ -570,8 +580,16 @@ _check_cidr_conflict() {
     while IFS= read -r route_line; do
       [[ -n "${route_line}" ]] || continue
 
-      local route_iface
-      route_iface="$(awk '{for (i = 1; i < NF; i++) if ($i == "dev") {print $(i + 1); exit}}' <<<"${route_line}")"
+      local route_iface=""
+      local route_fields=()
+      read -r -a route_fields <<<"${route_line}"
+      local i
+      for ((i = 0; i + 1 < ${#route_fields[@]}; i++)); do
+        if [[ "${route_fields[i]}" == "dev" ]]; then
+          route_iface="${route_fields[i + 1]}"
+          break
+        fi
+      done
       if [[ -n "${route_iface}" ]] && is_cube_owned_netdev "${route_iface}"; then
         skipped_cube_owned=$((skipped_cube_owned + 1))
         continue
@@ -594,7 +612,7 @@ _check_cidr_conflict() {
 
         local route_int
         route_int=$(ip_to_int "${route_ip}")
-        local route_host_bits=$(( 32 - route_mask ))
+        local route_host_bits=$(( 32 - 10#${route_mask} ))
         local route_mask_int=$(( (0xFFFFFFFF << route_host_bits) & 0xFFFFFFFF ))
         local route_net_start=$(( route_int & route_mask_int ))
         local route_net_end=$(( route_net_start | (0xFFFFFFFF & ~route_mask_int) ))
@@ -640,6 +658,10 @@ _check_cidr_conflict() {
     done < <(awk '$1 == "nameserver" {print $2}' "${resolv_path}")
   done < <(_resolv_conf_candidates)
 
+  if [[ "${skipped_cube_owned}" -gt 0 ]]; then
+    log "ignored ${skipped_cube_owned} existing Cube-owned network entries during CIDR conflict check"
+  fi
+
   if [[ "${#conflicts[@]}" -gt 0 ]]; then
     local conflict_list
     conflict_list="$(printf '\n  - %s' "${conflicts[@]}")"
@@ -651,16 +673,12 @@ _check_cidr_conflict() {
     172.16.0.0/12   (any subnet within)
     192.168.0.0/16  (any non-conflicting subnet)
 
-  For example, a commonly used CubeSandbox choice is `172.31.64.0/18`.
+  For example, a commonly used CubeSandbox choice is 172.31.64.0/18.
   You can apply it with:
     CUBE_SANDBOX_NETWORK_CIDR=172.31.64.0/18 ./install.sh
 
   To bypass this check (not recommended), set:
     CUBE_SANDBOX_NETWORK_CIDR_SKIP_CONFLICT_CHECK=1"
-  fi
-
-  if [[ "${skipped_cube_owned}" -gt 0 ]]; then
-    log "ignored ${skipped_cube_owned} existing Cube-owned network entries during CIDR conflict check"
   fi
 }
 
