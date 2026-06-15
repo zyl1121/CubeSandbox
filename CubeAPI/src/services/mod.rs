@@ -89,13 +89,19 @@ pub struct AppServices {
 }
 
 impl AppServices {
-    pub fn new(config: &ServerConfig, cubemaster: CubeMasterClient) -> Self {
+    pub fn new(
+        config: &ServerConfig,
+        cubemaster: CubeMasterClient,
+        http_client: reqwest::Client,
+    ) -> Self {
         Self {
             cluster: cluster::ClusterService::new(cubemaster.clone()),
             sandboxes: sandboxes::SandboxService::new(
                 cubemaster.clone(),
+                http_client,
                 config.instance_type.clone(),
                 config.sandbox_domain.clone(),
+                sandboxes::default_sandbox_proxy_base_url(),
             ),
             snapshots: snapshots::SnapshotService::new(
                 cubemaster.clone(),

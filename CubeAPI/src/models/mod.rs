@@ -164,7 +164,11 @@ pub struct NewSandbox {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<SandboxMetadata>,
 
-    #[serde(rename = "envVars", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        alias = "envs",
+        rename = "envVars",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub env_vars: Option<EnvVars>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -475,7 +479,7 @@ fn default_page_limit() -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use super::SandboxNetworkConfig;
+    use super::{NewSandbox, SandboxNetworkConfig};
 
     #[test]
     fn sandbox_network_config_accepts_snake_case_policy_fields() {
@@ -490,6 +494,25 @@ mod tests {
             Some(vec!["api.example.com".to_string(), "8.8.8.8".to_string()])
         );
         assert_eq!(cfg.deny_out, Some(vec!["0.0.0.0/0".to_string()]));
+    }
+
+    #[test]
+    fn new_sandbox_accepts_e2b_envs_alias() {
+        let req: NewSandbox = serde_json::from_value(serde_json::json!({
+            "templateID": "tpl-1",
+            "envs": {
+                "CUBE_TEST_ENV": "value"
+            }
+        }))
+        .expect("new sandbox request should deserialize");
+
+        assert_eq!(
+            req.env_vars
+                .as_ref()
+                .and_then(|envs| envs.get("CUBE_TEST_ENV"))
+                .map(String::as_str),
+            Some("value")
+        );
     }
 }
 

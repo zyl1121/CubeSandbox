@@ -27,25 +27,32 @@ const RET_CODE_OK: i32 = 0;
 const RET_CODE_HTTP_OK: i32 = 200;
 const RET_CODE_NOT_FOUND: i32 = 130404;
 const RET_CODE_CONFLICT: i32 = 130409;
+const ENVD_PORT: u16 = 49983;
 const HOSTDIR_MOUNT_KEY: &str = "host-mount";
 
 #[derive(Clone)]
 pub struct SandboxService {
     cubemaster: CubeMasterClient,
+    http_client: reqwest::Client,
     instance_type: String,
     sandbox_domain: String,
+    sandbox_proxy_base_url: Option<String>,
 }
 
 impl SandboxService {
     pub fn new(
         cubemaster: CubeMasterClient,
+        http_client: reqwest::Client,
         instance_type: String,
         sandbox_domain: String,
+        sandbox_proxy_base_url: Option<String>,
     ) -> Self {
         Self {
             cubemaster,
+            http_client,
             instance_type,
             sandbox_domain,
+            sandbox_proxy_base_url,
         }
     }
 
@@ -116,7 +123,15 @@ impl SandboxService {
     }
 
     pub async fn create_sandbox(&self, body: NewSandbox) -> AppResult<Sandbox> {
-        let template_id = body.template_id.clone();
+        let NewSandbox {
+            template_id,
+            timeout,
+            allow_internet_access,
+            network,
+            metadata,
+            env_vars,
+            ..
+        } = body;
         let mut annotations = HashMap::from([
             (
                 "cube.master.appsnapshot.template.id".to_string(),
@@ -128,7 +143,7 @@ impl SandboxService {
             ),
         ]);
 
-        let labels = body.metadata.map(|mut meta| {
+        let labels = metadata.map(|mut meta| {
             if let Some(value) = meta.remove(HOSTDIR_MOUNT_KEY) {
                 annotations.insert(HOSTDIR_MOUNT_KEY.to_string(), value);
             }
@@ -136,12 +151,12 @@ impl SandboxService {
         });
 
         let cube_network_config =
-            build_cube_network_config(body.allow_internet_access, body.network.as_ref())?;
+            build_cube_network_config(allow_internet_access, network.as_ref())?;
 
         let req = CreateSandboxRequest {
             request_id: new_request_id(),
             instance_type: self.instance_type.clone(),
-            timeout: Some(body.timeout),
+            timeout: Some(timeout),
             annotations,
             labels,
             volumes: None,
@@ -158,6 +173,16 @@ impl SandboxService {
             .map_err(internal_error)?;
 
         resp.ret.into_result().map_err(internal_error)?;
+
+        if let Some(env_vars) = env_vars.as_ref() {
+            if let Err(err) = self.init_sandbox_env_vars(&resp.sandbox_id, env_vars).await {
+                tracing::warn!(
+                    sandbox_id = %resp.sandbox_id,
+                    error = %err,
+                    "envd init after sandbox create failed"
+                );
+            }
+        }
 
         Ok(self.sandbox_response(template_id, resp.sandbox_id, resp.request_id))
     }
@@ -469,6 +494,84 @@ impl SandboxService {
             limit,
         }
     }
+
+    async fn init_sandbox_env_vars(
+        &self,
+        sandbox_id: &str,
+        env_vars: &HashMap<String, String>,
+    ) -> AppResult<()> {
+        let Some(base_url) = self.sandbox_proxy_base_url.as_deref() else {
+            return Ok(());
+        };
+        let url = build_envd_init_url(base_url, sandbox_id);
+        let resp = self
+            .http_client
+            .post(url)
+            .json(&EnvdInitRequest { env_vars })
+            .send()
+            .await
+            .map_err(|e| AppError::Internal(anyhow::anyhow!("envd init request failed: {}", e)))?;
+
+        if !resp.status().is_success() {
+            return Err(AppError::Internal(anyhow::anyhow!(
+                "envd init request returned HTTP {}",
+                resp.status()
+            )));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, serde::Serialize)]
+struct EnvdInitRequest<'a> {
+    #[serde(rename = "envVars")]
+    env_vars: &'a HashMap<String, String>,
+}
+
+pub(crate) fn default_sandbox_proxy_base_url() -> Option<String> {
+    let agenthub_proxy = std::env::var("AGENTHUB_SANDBOX_PROXY_URL").ok();
+    let node_ip = std::env::var("CUBE_SANDBOX_NODE_IP").ok();
+    let proxy_port = std::env::var("CUBE_PROXY_HTTP_PORT").ok();
+    derive_sandbox_proxy_base_url(
+        agenthub_proxy.as_deref(),
+        node_ip.as_deref(),
+        proxy_port.as_deref(),
+    )
+}
+
+fn derive_sandbox_proxy_base_url(
+    agenthub_proxy_url: Option<&str>,
+    node_ip: Option<&str>,
+    proxy_port: Option<&str>,
+) -> Option<String> {
+    if let Some(url) = agenthub_proxy_url.and_then(normalize_base_url) {
+        return Some(url);
+    }
+
+    let node_ip = node_ip.map(str::trim).filter(|value| !value.is_empty())?;
+    let proxy_port = proxy_port
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("80");
+    Some(format!("http://{}:{}", node_ip, proxy_port))
+}
+
+fn normalize_base_url(url: &str) -> Option<String> {
+    let trimmed = url.trim().trim_end_matches('/');
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn build_envd_init_url(base_url: &str, sandbox_id: &str) -> String {
+    format!(
+        "{}/sandbox/{}/{}/init",
+        base_url.trim_end_matches('/'),
+        sandbox_id,
+        ENVD_PORT
+    )
 }
 
 fn internal_error(error: impl std::fmt::Display) -> AppError {
@@ -690,13 +793,25 @@ fn map_egress_rule(rule: &EgressRule) -> CubeEgressRule {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::sync::Arc;
 
-    use super::{build_cube_network_config, filter_by_metadata, from_cubemaster_info};
-    use crate::cubemaster::{ListSandboxResponse, SandboxInfo};
-    use crate::models::{
-        EgressRule, EgressRuleAction, EgressRuleInject, EgressRuleMatch, SandboxNetworkConfig,
-        SandboxState,
+    use super::{
+        build_cube_network_config, build_envd_init_url, derive_sandbox_proxy_base_url,
+        filter_by_metadata, from_cubemaster_info, SandboxService,
     };
+    use crate::cubemaster::{CubeMasterClient, ListSandboxResponse, SandboxInfo};
+    use crate::models::{
+        EgressRule, EgressRuleAction, EgressRuleInject, EgressRuleMatch, NewSandbox,
+        SandboxNetworkConfig, SandboxState,
+    };
+    use axum::{
+        extract::{Path, State},
+        http::StatusCode,
+        routing::post,
+        Json, Router,
+    };
+    use serde_json::Value;
+    use tokio::sync::Mutex;
 
     #[test]
     fn metadata_filter_matches_all_pairs() {
@@ -907,5 +1022,177 @@ mod tests {
         assert!(listed
             .iter()
             .all(|sandbox| sandbox.state == SandboxState::Paused));
+    }
+
+    #[test]
+    fn derive_sandbox_proxy_base_url_prefers_explicit_proxy_url() {
+        let url = derive_sandbox_proxy_base_url(
+            Some("http://proxy.internal:8081/"),
+            Some("10.0.0.10"),
+            Some("80"),
+        );
+
+        assert_eq!(url.as_deref(), Some("http://proxy.internal:8081"));
+    }
+
+    #[test]
+    fn derive_sandbox_proxy_base_url_falls_back_to_one_click_envs() {
+        let url = derive_sandbox_proxy_base_url(None, Some("10.0.0.10"), Some("8080"));
+
+        assert_eq!(url.as_deref(), Some("http://10.0.0.10:8080"));
+    }
+
+    #[test]
+    fn build_envd_init_url_uses_path_based_proxy_route() {
+        assert_eq!(
+            build_envd_init_url("http://10.0.0.10:80/", "sb-123"),
+            "http://10.0.0.10:80/sandbox/sb-123/49983/init"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_sandbox_posts_envd_init_for_create_time_envs() {
+        #[derive(Clone, Default)]
+        struct Capture {
+            init_body: Arc<Mutex<Option<Value>>>,
+        }
+
+        async fn create_handler() -> Json<Value> {
+            Json(serde_json::json!({
+                "requestID": "req-1",
+                "sandbox_id": "sb-123",
+                "ret": { "ret_code": 0, "ret_msg": "ok" }
+            }))
+        }
+
+        async fn init_handler(
+            State(capture): State<Capture>,
+            Path((sandbox_id, port)): Path<(String, u16)>,
+            Json(body): Json<Value>,
+        ) -> StatusCode {
+            assert_eq!(sandbox_id, "sb-123");
+            assert_eq!(port, 49983);
+            *capture.init_body.lock().await = Some(body);
+            StatusCode::NO_CONTENT
+        }
+
+        async fn spawn_server(app: Router) -> String {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("listener should bind");
+            let addr = listener.local_addr().expect("listener addr");
+            tokio::spawn(async move {
+                axum::serve(listener, app).await.expect("server should run");
+            });
+            format!("http://{}", addr)
+        }
+
+        let cubemaster_url =
+            spawn_server(Router::new().route("/cube/sandbox", post(create_handler))).await;
+        let capture = Capture::default();
+        let proxy_url = spawn_server(
+            Router::new()
+                .route("/sandbox/:sandbox_id/:port/init", post(init_handler))
+                .with_state(capture.clone()),
+        )
+        .await;
+
+        let service = SandboxService::new(
+            CubeMasterClient::new(cubemaster_url, reqwest::Client::new()),
+            reqwest::Client::new(),
+            "cubebox".to_string(),
+            "cube.app".to_string(),
+            Some(proxy_url),
+        );
+
+        let sandbox = service
+            .create_sandbox(NewSandbox {
+                template_id: "tpl-1".to_string(),
+                timeout: 15,
+                auto_pause: false,
+                auto_resume: None,
+                secure: None,
+                allow_internet_access: None,
+                network: None,
+                metadata: None,
+                env_vars: Some(HashMap::from([(
+                    "CUBE_TEST_CREATE_ENV".to_string(),
+                    "from-create".to_string(),
+                )])),
+                mcp: None,
+                volume_mounts: None,
+            })
+            .await
+            .expect("sandbox create should succeed");
+
+        assert_eq!(sandbox.sandbox_id, "sb-123");
+        let init_body = capture.init_body.lock().await.clone().expect("init body");
+        assert_eq!(
+            init_body["envVars"]["CUBE_TEST_CREATE_ENV"],
+            serde_json::json!("from-create")
+        );
+    }
+
+    #[tokio::test]
+    async fn create_sandbox_keeps_success_when_envd_init_fails() {
+        async fn create_handler() -> Json<Value> {
+            Json(serde_json::json!({
+                "requestID": "req-1",
+                "sandbox_id": "sb-keep",
+                "ret": { "ret_code": 0, "ret_msg": "ok" }
+            }))
+        }
+
+        async fn init_handler() -> StatusCode {
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
+
+        async fn spawn_server(app: Router) -> String {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("listener should bind");
+            let addr = listener.local_addr().expect("listener addr");
+            tokio::spawn(async move {
+                axum::serve(listener, app).await.expect("server should run");
+            });
+            format!("http://{}", addr)
+        }
+
+        let cubemaster_url =
+            spawn_server(Router::new().route("/cube/sandbox", post(create_handler))).await;
+        let proxy_url = spawn_server(
+            Router::new().route("/sandbox/:sandbox_id/:port/init", post(init_handler)),
+        )
+        .await;
+
+        let service = SandboxService::new(
+            CubeMasterClient::new(cubemaster_url, reqwest::Client::new()),
+            reqwest::Client::new(),
+            "cubebox".to_string(),
+            "cube.app".to_string(),
+            Some(proxy_url),
+        );
+
+        let sandbox = service
+            .create_sandbox(NewSandbox {
+                template_id: "tpl-1".to_string(),
+                timeout: 15,
+                auto_pause: false,
+                auto_resume: None,
+                secure: None,
+                allow_internet_access: None,
+                network: None,
+                metadata: None,
+                env_vars: Some(HashMap::from([(
+                    "CUBE_TEST_CREATE_ENV".to_string(),
+                    "from-create".to_string(),
+                )])),
+                mcp: None,
+                volume_mounts: None,
+            })
+            .await
+            .expect("sandbox create should stay successful");
+
+        assert_eq!(sandbox.sandbox_id, "sb-keep");
     }
 }
