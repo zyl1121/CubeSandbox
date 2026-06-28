@@ -6,7 +6,6 @@ package cube
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"maps"
 	"strconv"
@@ -530,7 +529,6 @@ func dealCubeboxCreateReqWithTemplateCenter(ctx context.Context, templateID stri
 			return err
 		}
 	}
-
 	if templateReq.NetworkType != "" {
 		reqInOut.NetworkType = templateReq.NetworkType
 	}

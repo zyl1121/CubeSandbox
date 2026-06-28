@@ -78,6 +78,7 @@ const (
 	CubeAnnotationRootfsArtifactSizeBytes    = "cube.master.rootfs.artifact.size_bytes"
 	CubeAnnotationWritableLayerSize          = "cube.master.rootfs.writable_layer_size"
 	CubeAnnotationTemplateSpecFingerprint    = "cube.master.template.spec_fingerprint"
+	CubeAnnotationCreateTimeEnvVars          = "cube.master.internal.create_time_env_vars"
 
 	CubeAnnotationsVirtiofsCache = "cube.master.virtiofs.cache"
 

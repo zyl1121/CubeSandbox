@@ -6,9 +6,13 @@ package cubebox
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
+	"net/http/httptest"
+	neturl "net/url"
+	"strconv"
 	"testing"
 	"time"
 
@@ -18,6 +22,7 @@ import (
 	"github.com/tencentcloud/CubeSandbox/Cubelet/api/services/cubebox/v1"
 	"github.com/tencentcloud/CubeSandbox/Cubelet/api/services/errorcode/v1"
 	"github.com/tencentcloud/CubeSandbox/Cubelet/network/proto"
+	"github.com/tencentcloud/CubeSandbox/Cubelet/pkg/constants"
 	"github.com/tencentcloud/CubeSandbox/Cubelet/pkg/ret"
 	cubeboxstore "github.com/tencentcloud/CubeSandbox/Cubelet/pkg/store/cubebox"
 	"github.com/tencentcloud/CubeSandbox/Cubelet/plugins/workflow"
@@ -144,6 +149,141 @@ func TestProbeErrAction(t *testing.T) {
 	retErr := l.doProbe(ctx, cnt, ci)
 	err, _ := ret.FromError(retErr)
 	assert.Equal(t, errorcode.ErrorCode_InvalidParamFormat, err.Code())
+}
+
+func TestDoCreateTimeEnvdInitPostsEnvVars(t *testing.T) {
+	origPort := envdInitPort
+	defer func() {
+		envdInitPort = origPort
+	}()
+
+	var gotBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/init" {
+			t.Fatalf("path=%q, want /init", r.URL.Path)
+		}
+		defer r.Body.Close()
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	u, err := neturl.Parse(server.URL)
+	if err != nil {
+		t.Fatalf("parse server URL: %v", err)
+	}
+	port, err := strconv.Atoi(u.Port())
+	if err != nil {
+		t.Fatalf("parse server port: %v", err)
+	}
+	envdInitPort = port
+
+	req := &cubebox.RunCubeSandboxRequest{
+		Annotations: map[string]string{
+			constants.MasterAnnotationComponentEnvdVersion: "0.2.0",
+			constants.MasterAnnotationCreateTimeEnvVars:    `{"SESSION_ID":"user-session-test","USER_ID":"42"}`,
+		},
+	}
+	sandBox := &cubeboxstore.CubeBox{IP: "127.0.0.1"}
+
+	l := &local{}
+	if err := l.doCreateTimeEnvdInit(context.Background(), req, sandBox); err != nil {
+		t.Fatalf("doCreateTimeEnvdInit err=%v", err)
+	}
+	envVars, ok := gotBody["envVars"].(map[string]any)
+	if !ok {
+		t.Fatalf("envVars payload missing: %#v", gotBody)
+	}
+	if envVars["SESSION_ID"] != "user-session-test" {
+		t.Fatalf("SESSION_ID=%v, want user-session-test", envVars["SESSION_ID"])
+	}
+	if envVars["USER_ID"] != "42" {
+		t.Fatalf("USER_ID=%v, want 42", envVars["USER_ID"])
+	}
+}
+
+func TestDoCreateTimeEnvdInitFailsOnHTTPError(t *testing.T) {
+	origPort := envdInitPort
+	defer func() {
+		envdInitPort = origPort
+	}()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "envd refused init", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	u, err := neturl.Parse(server.URL)
+	if err != nil {
+		t.Fatalf("parse server URL: %v", err)
+	}
+	port, err := strconv.Atoi(u.Port())
+	if err != nil {
+		t.Fatalf("parse server port: %v", err)
+	}
+	envdInitPort = port
+
+	req := &cubebox.RunCubeSandboxRequest{
+		Annotations: map[string]string{
+			constants.MasterAnnotationComponentEnvdVersion: "0.2.0",
+			constants.MasterAnnotationCreateTimeEnvVars:    `{"SESSION_ID":"user-session-test"}`,
+		},
+	}
+	sandBox := &cubeboxstore.CubeBox{IP: "127.0.0.1"}
+
+	l := &local{}
+	retErr := l.doCreateTimeEnvdInit(context.Background(), req, sandBox)
+	if retErr == nil {
+		t.Fatal("expected init failure")
+	}
+	errInfo, _ := ret.FromError(retErr)
+	assert.Equal(t, errorcode.ErrorCode_ExecCommandInSandboxFailed, errInfo.Code())
+	assert.Contains(t, errInfo.Message(), "envd refused init")
+}
+
+func TestDoCreateTimeEnvdInitFailsWhenTemplateHasNoEnvdSignal(t *testing.T) {
+	origPort := envdInitPort
+	defer func() {
+		envdInitPort = origPort
+	}()
+
+	called := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	u, err := neturl.Parse(server.URL)
+	if err != nil {
+		t.Fatalf("parse server URL: %v", err)
+	}
+	port, err := strconv.Atoi(u.Port())
+	if err != nil {
+		t.Fatalf("parse server port: %v", err)
+	}
+	envdInitPort = port
+
+	req := &cubebox.RunCubeSandboxRequest{
+		Annotations: map[string]string{
+			constants.MasterAnnotationCreateTimeEnvVars: `{"SESSION_ID":"user-session-test"}`,
+		},
+	}
+	sandBox := &cubeboxstore.CubeBox{IP: "127.0.0.1"}
+
+	l := &local{}
+	retErr := l.doCreateTimeEnvdInit(context.Background(), req, sandBox)
+	if retErr == nil {
+		t.Fatal("expected failure when envd signal is absent")
+	}
+	errInfo, _ := ret.FromError(retErr)
+	assert.Equal(t, errorcode.ErrorCode_PreConditionFailed, errInfo.Code())
+	assert.Contains(t, errInfo.Message(), "envd-backed template")
+	if called {
+		t.Fatal("expected no envd init request when envd signal is absent")
+	}
 }
 
 func TestProbe(t *testing.T) {

@@ -46,6 +46,7 @@ type CreateCubeSandboxReq struct {
 
 	Annotations       map[string]string `json:"annotations,omitempty" `
 	Labels            map[string]string `json:"labels,omitempty" `
+	CreateTimeEnvVars map[string]string `json:"create_time_env_vars,omitempty"`
 	DistributionScope []string          `json:"distribution_scope,omitempty"`
 	InstanceType      string            `json:"instance_type,omitempty"`
 	NetworkType       string            `json:"network_type,omitempty"`

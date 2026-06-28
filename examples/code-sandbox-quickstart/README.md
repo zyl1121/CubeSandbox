@@ -122,6 +122,7 @@ hello cube
 | `exec_code.py` | `sandbox.run_code()` — execute Python code inside a sandbox |
 | `cmd.py` | `sandbox.commands.run()` — execute shell commands |
 | `create.py` | `sandbox.get_info()` — retrieve sandbox metadata |
+| `create_with_envs.py` | `Sandbox.create(envs=...)` — pass create-time environment variables |
 | `read.py` | `sandbox.files.read()` — read a file from the sandbox filesystem |
 | `pause.py` | `sandbox.pause()` / `sandbox.connect()` — snapshot and restore |
 | `auto_resume.py` | `lifecycle={"on_timeout": "pause", "auto_resume": True}` — let the platform pause idle sandboxes and resume them on the next request |
@@ -143,6 +144,21 @@ with Sandbox.create(template=template_id) as sandbox:
 with Sandbox.create(template=template_id) as sandbox:
     result = sandbox.commands.run("echo hello cube")
     print(result.stdout)
+```
+
+### Create-Time Environment Variables
+
+You can pass environment variables when creating a sandbox. They are then
+available to subsequent command execution in that sandbox:
+
+```python
+python create_with_envs.py
+```
+
+Expected output:
+
+```text
+user-session-test
 ```
 
 ### pause.py — Pause & Resume

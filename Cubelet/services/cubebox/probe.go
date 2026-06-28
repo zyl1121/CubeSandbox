@@ -5,7 +5,9 @@
 package cubebox
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -14,6 +16,7 @@ import (
 	"net/url"
 	"runtime/debug"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/tencentcloud/CubeSandbox/Cubelet/api/services/cubebox/v1"
@@ -28,6 +31,13 @@ import (
 	"github.com/tencentcloud/CubeSandbox/Cubelet/pkg/version"
 	"github.com/tencentcloud/CubeSandbox/Cubelet/plugins/workflow"
 )
+
+const (
+	envdInitPath    = "/init"
+	envdInitTimeout = 10 * time.Second
+)
+
+var envdInitPort = 49983
 
 func (l *local) doProbe(ctx context.Context, c *cubebox.ContainerConfig, ci *cubeboxstore.Container) (retErr error) {
 	startTime := time.Now()
@@ -138,6 +148,70 @@ func (l *local) doProbe(ctx context.Context, c *cubebox.ContainerConfig, ci *cub
 				" detecting %s failed.", ci.IP)
 		}
 	default:
+	}
+	return nil
+}
+
+func (l *local) doCreateTimeEnvdInit(ctx context.Context, req *cubebox.RunCubeSandboxRequest, sandBox *cubeboxstore.CubeBox) error {
+	if req == nil || sandBox == nil || req.Annotations == nil {
+		return nil
+	}
+	raw := strings.TrimSpace(req.Annotations[constants.MasterAnnotationCreateTimeEnvVars])
+	if raw == "" {
+		return nil
+	}
+	// The propagated envd semantic-version annotation is the runtime capability
+	// signal for envd-backed templates. When callers request create-time env
+	// injection, missing this signal means the sandbox cannot satisfy the envd
+	// init contract, so fail fast instead of silently dropping the request.
+	if strings.TrimSpace(req.Annotations[constants.MasterAnnotationComponentEnvdVersion]) == "" {
+		return ret.Err(errorcode.ErrorCode_PreConditionFailed, "create_time_env_vars requires an envd-backed template")
+	}
+
+	envVars := map[string]string{}
+	if err := json.Unmarshal([]byte(raw), &envVars); err != nil {
+		return ret.Errorf(errorcode.ErrorCode_InvalidParamFormat, "invalid create_time_env_vars annotation: %v", err)
+	}
+	if len(envVars) == 0 {
+		return nil
+	}
+	if strings.TrimSpace(sandBox.IP) == "" {
+		return ret.Err(errorcode.ErrorCode_CreateNetworkFailed, "sandbox IP is empty for create_time_env_vars init")
+	}
+
+	body, err := json.Marshal(struct {
+		EnvVars map[string]string `json:"envVars"`
+	}{
+		EnvVars: envVars,
+	})
+	if err != nil {
+		return ret.Errorf(errorcode.ErrorCode_InvalidParamFormat, "marshal create_time_env_vars init request failed: %v", err)
+	}
+
+	innerCtx, cancel := context.WithTimeout(ctx, envdInitTimeout)
+	defer cancel()
+
+	reqURL := formatURL("http", sandBox.IP, envdInitPort, envdInitPath)
+	httpReq, err := http.NewRequestWithContext(innerCtx, http.MethodPost, reqURL.String(), bytes.NewReader(body))
+	if err != nil {
+		return ret.Errorf(errorcode.ErrorCode_InvalidParamFormat, "build envd init request failed: %v", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := (&http.Client{}).Do(httpReq)
+	if err != nil {
+		return ret.Errorf(errorcode.ErrorCode_ExecCommandInSandboxFailed, "envd init request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return ret.Errorf(
+			errorcode.ErrorCode_ExecCommandInSandboxFailed,
+			"envd init request returned HTTP %d: %s",
+			resp.StatusCode,
+			strings.TrimSpace(string(respBody)),
+		)
 	}
 	return nil
 }

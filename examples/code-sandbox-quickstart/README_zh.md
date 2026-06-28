@@ -117,6 +117,7 @@ hello cube
 | `exec_code.py` | `sandbox.run_code()` — 在沙箱中执行 Python 代码 |
 | `cmd.py` | `sandbox.commands.run()` — 执行 Shell 命令 |
 | `create.py` | `sandbox.get_info()` — 获取沙箱元数据 |
+| `create_with_envs.py` | `Sandbox.create(envs=...)` — 创建时注入环境变量 |
 | `read.py` | `sandbox.files.read()` — 读取沙箱文件系统中的文件 |
 | `pause.py` | `sandbox.pause()` / `sandbox.connect()` — 快照与恢复 |
 | `auto_resume.py` | `lifecycle={"on_timeout": "pause", "auto_resume": True}` — 平台在空闲超时后自动暂停沙箱，下一次请求自动恢复 |
@@ -138,6 +139,20 @@ with Sandbox.create(template=template_id) as sandbox:
 with Sandbox.create(template=template_id) as sandbox:
     result = sandbox.commands.run("echo hello cube")
     print(result.stdout)
+```
+
+### 创建时注入环境变量
+
+可以在创建沙箱时传入环境变量，后续在该沙箱中的命令执行也可以读取到这些变量：
+
+```python
+python create_with_envs.py
+```
+
+预期输出:
+
+```text
+user-session-test
 ```
 
 ### pause.py — 暂停与恢复

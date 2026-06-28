@@ -336,6 +336,9 @@ func (l *local) createContainers(ctx context.Context, flowOpts *workflow.CreateC
 			containerLog.Errorf("post create container failed, err: %v", err)
 		}
 	}
+	if err := l.doCreateTimeEnvdInit(ctx, realReq, sandBox); err != nil {
+		return err
+	}
 
 	pid := sandBox.Endpoint.Pid
 
