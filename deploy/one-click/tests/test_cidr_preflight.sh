@@ -106,6 +106,26 @@ test_rejects_nameserver_overlap() {
   assert_contains_text "${output}" "DNS nameservers"
 }
 
+test_ignores_invalid_resolver_nameservers() {
+  local resolv="${TMP_DIR}/resolv-invalid.conf"
+  cat > "${resolv}" <<'EOF'
+nameserver 999.999.999.999
+nameserver 0377.0377.0377.0377
+nameserver 2001:db8::1
+nameserver 10.77.0.53
+EOF
+
+  local output
+  if output="$(TEST_RESOLV_CANDIDATES="${resolv}" IP_SCENARIO=empty check_cidr_preflight "10.77.0.0/16" 2>&1)"; then
+    fail "expected valid overlapping resolver nameserver to be rejected"
+  fi
+
+  assert_contains_text "${output}" "nameserver 10.77.0.53 (${resolv})"
+  if [[ "${output}" == *"999.999.999.999"* || "${output}" == *"0377.0377.0377.0377"* || "${output}" == *"2001:db8::1"* ]]; then
+    fail "expected invalid or IPv6 nameservers to be ignored"
+  fi
+}
+
 test_dedupes_equivalent_resolver_paths() {
   local resolv="${TMP_DIR}/resolv-dedupe.conf"
   local resolv_link="${TMP_DIR}/resolv-dedupe-link.conf"
@@ -179,6 +199,7 @@ test_rejects_sandbox_cidr_mask_outside_supported_range() {
 }
 
 test_rejects_nameserver_overlap
+test_ignores_invalid_resolver_nameservers
 test_dedupes_equivalent_resolver_paths
 test_allows_same_cidr_cube_dev_reinstall
 test_allows_cube_router_residue_reinstall

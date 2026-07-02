@@ -1524,27 +1524,6 @@ is_cube_managed_netdev() {
   iface="${iface%%@*}"
   [[ "${iface}" == "cube-dev" || "${iface}" == "cube-router" ]] || is_cube_tap_netdev "${iface}"
 }
-
-resolv_conf_candidates() {
-  printf '%s\n' \
-    "/run/systemd/resolve/resolv.conf" \
-    "/run/systemd/resolve/stub-resolv.conf" \
-    "/run/NetworkManager/no-stub-resolv.conf" \
-    "/var/run/NetworkManager/no-stub-resolv.conf" \
-    "/run/resolvconf/resolv.conf" \
-    "/etc/resolvconf/run/resolv.conf" \
-    "/etc/resolv.conf"
-}
-
-canonicalize_resolv_conf_path() {
-  local path="$1"
-  if command -v readlink >/dev/null 2>&1; then
-    readlink -f "${path}" 2>/dev/null || printf '%s\n' "${path}"
-    return 0
-  fi
-  printf '%s\n' "${path}"
-}
-
 # _check_cidr_conflict: Detect overlap between the specified CIDR and
 # existing host network interfaces, routes and DNS nameservers. Exits with die()
 # on conflict.
@@ -1683,7 +1662,7 @@ _check_cidr_conflict() {
 
     local nameserver
     while IFS= read -r nameserver; do
-      [[ "${nameserver}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || continue
+      ipv4_literal_is_valid "${nameserver}" || continue
 
       local ns_int
       ns_int=$(ip_to_int "${nameserver}")
