@@ -31,7 +31,6 @@ CUBE_SANDBOX_NODE_IP="${CUBE_SANDBOX_NODE_IP:-}"
 CUBE_PROXY_REDIS_IP="${CUBE_PROXY_REDIS_IP:-127.0.0.1}"
 CUBE_PROXY_REDIS_PORT="${CUBE_PROXY_REDIS_PORT:-${CUBE_SANDBOX_REDIS_PORT:-6379}}"
 CUBE_PROXY_REDIS_PASSWORD="${CUBE_PROXY_REDIS_PASSWORD:-${CUBE_SANDBOX_REDIS_PASSWORD:-ceuhvu123}}"
-CUBE_PROXY_NGINX_RESOLVER="${CUBE_PROXY_NGINX_RESOLVER:-}"
 CUBE_PROXY_HTTPS_PORT="${CUBE_PROXY_HTTPS_PORT:-443}"
 CUBE_PROXY_HTTP_PORT="${CUBE_PROXY_HTTP_PORT:-80}"
 CUBE_PROXY_SSL_CERT="${CUBE_PROXY_SSL_CERT:-cube.app+3.pem}"
@@ -71,16 +70,7 @@ case "${COMPOSE_DETACH}" in
   *) die "unsupported ONE_CLICK_COMPOSE_DETACH: ${COMPOSE_DETACH} (expected 0 or 1)" ;;
 esac
 
-if [[ -z "${CUBE_PROXY_NGINX_RESOLVER}" ]]; then
-  mapfile -t proxy_resolver_nameservers < <(discover_resolver_nameservers)
-  if [[ "${#proxy_resolver_nameservers[@]}" -gt 0 ]]; then
-    CUBE_PROXY_NGINX_RESOLVER="${proxy_resolver_nameservers[*]}"
-  fi
-fi
-
-ensure_hostname_target_has_resolver "${CUBE_PROXY_REDIS_IP}" "${CUBE_PROXY_NGINX_RESOLVER}" "CUBE_PROXY_REDIS_IP"
-
-NGINX_RESOLVER_DIRECTIVES="$(build_cube_proxy_resolver_directives "${CUBE_PROXY_NGINX_RESOLVER}")"
+CUBE_PROXY_NGINX_RESOLVER="${CUBE_PROXY_NGINX_RESOLVER:-}"
 
 install_mkcert() {
   if command -v mkcert >/dev/null 2>&1; then
@@ -130,18 +120,6 @@ render_template_atomic \
   -e "s#__CUBE_SIDECAR_NGX_ADDR__#$(escape_sed "${CUBE_SIDECAR_NGX_ADDR}" '#')#g" \
   -e "s#__CUBE_ADMIN_TOKEN__#$(escape_sed "${CUBE_ADMIN_TOKEN}" '#')#g"
 
-NGINX_TEMPLATE="${PROXY_DIR}/nginx.conf.template"
-NGINX_CONF="${PROXY_DIR}/nginx.conf"
-ensure_file "${NGINX_TEMPLATE}"
-render_template_atomic \
-  "${NGINX_TEMPLATE}" \
-  "${NGINX_CONF}" \
-  -e "s#__CUBE_PROXY_RESOLVER_DIRECTIVES__#$(escape_sed "${NGINX_RESOLVER_DIRECTIVES}" '#')#g" \
-  -e "s/__CUBE_PROXY_HTTPS_PORT__/$(escape_sed "${CUBE_PROXY_HTTPS_PORT}")/g" \
-  -e "s/__CUBE_PROXY_HTTP_PORT__/$(escape_sed "${CUBE_PROXY_HTTP_PORT}")/g" \
-  -e "s/__CUBE_PROXY_SSL_CERT__/$(escape_sed "${CUBE_PROXY_SSL_CERT}")/g" \
-  -e "s/__CUBE_PROXY_SSL_KEY__/$(escape_sed "${CUBE_PROXY_SSL_KEY}")/g"
-
 render_template_atomic \
   "${COMPOSE_TEMPLATE}" \
   "${COMPOSE_FILE}" \
@@ -151,7 +129,12 @@ render_template_atomic \
   -e "s#__CUBE_PROXY_BUILD_CONTEXT__#$(escape_sed "${BUILD_CONTEXT_DIR}" '#')#g" \
   -e "s#__CUBE_PROXY_CERT_DIR__#$(escape_sed "${CERT_DIR}" '#')#g" \
   -e "s#__CUBE_PROXY_GLOBAL_CONF__#$(escape_sed "${GLOBAL_CONF}" '#')#g" \
-  -e "s#__CUBE_PROXY_NGINX_CONF__#$(escape_sed "${NGINX_CONF}" '#')#g" \
+  -e "s#__CUBE_PROXY_REDIS_IP__#$(escape_sed "${CUBE_PROXY_REDIS_IP}" '#')#g" \
+  -e "s#__CUBE_PROXY_NGINX_RESOLVER__#$(escape_sed "${CUBE_PROXY_NGINX_RESOLVER}" '#')#g" \
+  -e "s#__CUBE_PROXY_HTTP_PORT__#$(escape_sed "${CUBE_PROXY_HTTP_PORT}" '#')#g" \
+  -e "s#__CUBE_PROXY_HTTPS_PORT__#$(escape_sed "${CUBE_PROXY_HTTPS_PORT}" '#')#g" \
+  -e "s#__CUBE_PROXY_SSL_CERT__#$(escape_sed "${CUBE_PROXY_SSL_CERT}" '#')#g" \
+  -e "s#__CUBE_PROXY_SSL_KEY__#$(escape_sed "${CUBE_PROXY_SSL_KEY}" '#')#g" \
   -e "s#__CUBE_SIDECAR_REDIS_ADDR__#$(escape_sed "${CUBE_SIDECAR_REDIS_ADDR}" '#')#g" \
   -e "s#__CUBE_SIDECAR_REDIS_PASSWORD__#$(escape_sed "${CUBE_SIDECAR_REDIS_PASSWORD}" '#')#g" \
   -e "s#__CUBE_SIDECAR_REDIS_DB__#$(escape_sed "${CUBE_SIDECAR_REDIS_DB}" '#')#g" \

@@ -26,7 +26,12 @@ services:
       # sidecar makes to its co-resident nginx. Must match the value Lua
       # global.conf substitutes into $cube_admin_token.
       CUBE_SIDECAR_ADMIN_TOKEN: "__CUBE_ADMIN_TOKEN__"
+      CUBE_PROXY_REDIS_IP: "__CUBE_PROXY_REDIS_IP__"
+      CUBE_PROXY_NGINX_RESOLVER: "__CUBE_PROXY_NGINX_RESOLVER__"
+      CUBE_PROXY_HTTP_PORT: "__CUBE_PROXY_HTTP_PORT__"
+      CUBE_PROXY_HTTPS_PORT: "__CUBE_PROXY_HTTPS_PORT__"
+      CUBE_PROXY_SSL_CERT: "__CUBE_PROXY_SSL_CERT__"
+      CUBE_PROXY_SSL_KEY: "__CUBE_PROXY_SSL_KEY__"
     volumes:
       - __CUBE_PROXY_CERT_DIR__:/usr/local/openresty/nginx/certs:ro
       - __CUBE_PROXY_GLOBAL_CONF__:/usr/local/openresty/nginx/conf/global/global.conf:ro
-      - __CUBE_PROXY_NGINX_CONF__:/usr/local/openresty/nginx/conf/nginx.conf:ro

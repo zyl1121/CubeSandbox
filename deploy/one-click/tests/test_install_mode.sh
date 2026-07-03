@@ -10,6 +10,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ONE_CLICK_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+ROOT_DIR="$(cd "${ONE_CLICK_DIR}/../.." && pwd)"
+CUBE_PROXY_START_SH="${ROOT_DIR}/CubeProxy/start.sh"
 
 TMP_DIR="$(mktemp -d)"
 cleanup() {
@@ -417,40 +419,35 @@ test_validation_library_fallback_die() {
   fi
 }
 
-test_runtime_discover_resolver_nameservers() {
-  local resolv_real="${TMP_DIR}/runtime-resolver-real.conf"
-  local resolv_link="${TMP_DIR}/runtime-resolver-link.conf"
-  local resolv_extra="${TMP_DIR}/runtime-resolver-extra.conf"
+test_cube_proxy_start_discover_resolver_nameservers() {
+  local resolv_conf="${TMP_DIR}/cube-proxy-resolver.conf"
   local output=""
 
-  cat > "${resolv_real}" <<'EOF'
+  cat > "${resolv_conf}" <<'EOF'
 nameserver 127.0.0.53
+nameserver 100.100.2.136
 nameserver 100.100.2.136
 nameserver 999.999.999.999
 nameserver 0377.0377.0377.0377
-EOF
-  ln -s "${resolv_real}" "${resolv_link}"
-  cat > "${resolv_extra}" <<'EOF'
 nameserver 169.254.254.53
 nameserver 2001:db8::1
 EOF
 
   output="$(
-    TEST_RESOLV_CANDIDATES="${resolv_real}:${resolv_link}:${resolv_extra}" \
+    CUBE_PROXY_RESOLV_CONF="${resolv_conf}" \
       bash -c '
         set -euo pipefail
-        source "'"${ONE_CLICK_DIR}"'/scripts/one-click/common.sh"
+        source "'"${CUBE_PROXY_START_SH}"'"
         discover_resolver_nameservers
       '
   )"
 
+  grep -Fxq "127.0.0.53" <<<"${output}" \
+    || fail "container-side discover_resolver_nameservers should keep loopback resolvers from the container resolv.conf"
   grep -Fxq "100.100.2.136" <<<"${output}" \
     || fail "runtime discover_resolver_nameservers should include upstream nameserver"
   grep -Fxq "169.254.254.53" <<<"${output}" \
     || fail "runtime discover_resolver_nameservers should include non-loopback nameserver"
-  if grep -Fxq "127.0.0.53" <<<"${output}"; then
-    fail "runtime discover_resolver_nameservers should skip loopback stub nameservers"
-  fi
   if grep -Fxq "999.999.999.999" <<<"${output}" || grep -Fxq "0377.0377.0377.0377" <<<"${output}"; then
     fail "runtime discover_resolver_nameservers should skip invalid IPv4 nameservers"
   fi
@@ -462,13 +459,13 @@ EOF
   fi
 }
 
-test_runtime_cube_proxy_resolver_directives() {
+test_cube_proxy_start_resolver_directives() {
   local output=""
 
   output="$(
     bash -c '
       set -euo pipefail
-      source "'"${ONE_CLICK_DIR}"'/scripts/one-click/common.sh"
+      source "'"${CUBE_PROXY_START_SH}"'"
       build_cube_proxy_resolver_directives "169.254.254.53 100.100.2.136"
     '
   )"
@@ -478,82 +475,109 @@ test_runtime_cube_proxy_resolver_directives() {
   output="$(
     bash -c '
       set -euo pipefail
-      source "'"${ONE_CLICK_DIR}"'/scripts/one-click/common.sh"
+      source "'"${CUBE_PROXY_START_SH}"'"
       build_cube_proxy_resolver_directives ""
     '
   )"
   [[ -z "${output}" ]] || fail "build_cube_proxy_resolver_directives should render empty output for an empty resolver list"
 }
 
-test_runtime_hostname_target_requires_resolver() {
-  local err="${TMP_DIR}/runtime-resolver-requirement.err"
+test_cube_proxy_start_hostname_target_requires_resolver() {
+  local err="${TMP_DIR}/cube-proxy-resolver-requirement.err"
 
   if (
     bash -c '
       set -euo pipefail
-      source "'"${ONE_CLICK_DIR}"'/scripts/one-click/common.sh"
-      die() {
-        echo "[captured] $*" >&2
-        return 1
-      }
+      source "'"${CUBE_PROXY_START_SH}"'"
       ensure_hostname_target_has_resolver "redis.example.com" "" "CUBE_PROXY_REDIS_IP"
     '
   ) >/dev/null 2>"${err}"; then
     fail "hostname Redis target without resolver should fail fast"
   fi
-  assert_contains "${err}" "CUBE_PROXY_REDIS_IP 'redis.example.com' is not an IPv4 literal"
+  assert_contains "${err}" "CUBE_PROXY_REDIS_IP 'redis.example.com' is not an IP literal"
   assert_contains "${err}" "IPv6-only resolvers are not currently supported"
+  assert_contains "${err}" "container resolv.conf has at least one IPv4 nameserver"
 
   if ! (
     bash -c '
       set -euo pipefail
-      source "'"${ONE_CLICK_DIR}"'/scripts/one-click/common.sh"
+      source "'"${CUBE_PROXY_START_SH}"'"
       ensure_hostname_target_has_resolver "127.0.0.1" "" "CUBE_PROXY_REDIS_IP"
     '
   ) >/dev/null 2>&1; then
     fail "IPv4 literal Redis target should not require a resolver"
   fi
 
+  if ! (
+    bash -c '
+      set -euo pipefail
+      source "'"${CUBE_PROXY_START_SH}"'"
+      ensure_hostname_target_has_resolver "[fd00::1]" "" "CUBE_PROXY_REDIS_IP"
+    '
+  ) >/dev/null 2>&1; then
+    fail "IPv6 literal Redis target should not require a resolver"
+  fi
+
   if (
     bash -c '
       set -euo pipefail
-      source "'"${ONE_CLICK_DIR}"'/scripts/one-click/common.sh"
-      is_ipv4_literal "0377.0377.0377.0377"
+      source "'"${CUBE_PROXY_START_SH}"'"
+      is_ip_literal "0377.0377.0377.0377"
     '
   ) >/dev/null 2>&1; then
-    fail "is_ipv4_literal should reject leading-zero out-of-range octets"
+    fail "is_ip_literal should reject leading-zero out-of-range octets"
   fi
 }
 
-test_runtime_cube_proxy_nginx_resolver_render() {
+test_cube_proxy_start_nginx_render() {
   local template="${TMP_DIR}/cube-proxy-nginx.template"
   local output="${TMP_DIR}/cube-proxy-nginx.conf"
 
   cat > "${template}" <<'EOF'
 http {
     __CUBE_PROXY_RESOLVER_DIRECTIVES__
+    server {
+        listen __CUBE_PROXY_HTTP_PORT__ reuseport;
+        ssl_certificate /usr/local/openresty/nginx/certs/__CUBE_PROXY_SSL_CERT__;
+        ssl_certificate_key /usr/local/openresty/nginx/certs/__CUBE_PROXY_SSL_KEY__;
+        set $host_proxy_port __CUBE_PROXY_HTTP_PORT__;
+    }
+    server {
+        listen __CUBE_PROXY_HTTPS_PORT__ ssl reuseport;
+        set $host_proxy_port __CUBE_PROXY_HTTPS_PORT__;
+    }
 }
 EOF
 
   if ! (
+    CUBE_PROXY_NGINX_TEMPLATE_PATH="${template}" \
+    CUBE_PROXY_NGINX_CONFIG_PATH="${output}" \
+    CUBE_PROXY_REDIS_IP="redis.example.com" \
+    CUBE_PROXY_NGINX_RESOLVER="169.254.254.53 100.100.2.136" \
+    CUBE_PROXY_HTTP_PORT="80" \
+    CUBE_PROXY_HTTPS_PORT="443" \
+    CUBE_PROXY_SSL_CERT="tls.pem" \
+    CUBE_PROXY_SSL_KEY="tls-key.pem" \
     bash -c '
       set -euo pipefail
-      source "'"${ONE_CLICK_DIR}"'/scripts/one-click/common.sh"
-      directive="$(build_cube_proxy_resolver_directives "169.254.254.53 100.100.2.136")"
-      render_template_atomic "'"${template}"'" "'"${output}"'" \
-        -e "s#__CUBE_PROXY_RESOLVER_DIRECTIVES__#$(escape_sed "${directive}" "#")#g"
+      source "'"${CUBE_PROXY_START_SH}"'"
+      render_nginx_config
     '
   ) >/dev/null 2>&1; then
-    fail "render_template_atomic should render resolver directives into nginx.conf"
+    fail "render_nginx_config should render nginx.conf from the container template"
   fi
 
   assert_contains "${output}" "resolver 169.254.254.53 100.100.2.136 ipv6=off valid=30s; resolver_timeout 5s;"
+  assert_contains "${output}" "listen 80 reuseport;"
+  assert_contains "${output}" "listen 443 ssl reuseport;"
+  assert_contains "${output}" "/usr/local/openresty/nginx/certs/tls.pem"
+  assert_contains "${output}" "/usr/local/openresty/nginx/certs/tls-key.pem"
   if grep -Fq "__CUBE_PROXY_RESOLVER_DIRECTIVES__" "${output}"; then
     fail "rendered nginx.conf should not retain the resolver placeholder"
   fi
 }
 
-test_runtime_cube_proxy_nginx_empty_resolver_render() {
+test_cube_proxy_start_nginx_empty_resolver_render() {
   local template="${TMP_DIR}/cube-proxy-nginx-empty.template"
   local output="${TMP_DIR}/cube-proxy-nginx-empty.conf"
 
@@ -564,19 +588,20 @@ http {
 EOF
 
   if ! (
+    CUBE_PROXY_NGINX_TEMPLATE_PATH="${template}" \
+    CUBE_PROXY_NGINX_CONFIG_PATH="${output}" \
+    CUBE_PROXY_REDIS_IP="127.0.0.1" \
     bash -c '
       set -euo pipefail
-      source "'"${ONE_CLICK_DIR}"'/scripts/one-click/common.sh"
-      directive="$(build_cube_proxy_resolver_directives "")"
-      render_template_atomic "'"${template}"'" "'"${output}"'" \
-        -e "s#__CUBE_PROXY_RESOLVER_DIRECTIVES__#$(escape_sed "${directive}" "#")#g"
+      source "'"${CUBE_PROXY_START_SH}"'"
+      render_nginx_config
     '
   ) >/dev/null 2>&1; then
-    fail "render_template_atomic should tolerate an empty resolver directive"
+    fail "render_nginx_config should tolerate an empty resolver directive"
   fi
 
   if grep -Fq "__CUBE_PROXY_RESOLVER_DIRECTIVES__" "${output}"; then
-    fail "empty resolver render should not retain the placeholder"
+    fail "empty resolver render should not retain the resolver placeholder"
   fi
   assert_contains "${output}" "http {"
 }
@@ -719,13 +744,29 @@ test_install_sh_wires_upgrade_flow() {
 }
 
 test_cube_proxy_resolver_wiring() {
-  assert_contains "${ONE_CLICK_DIR}/build-release-bundle.sh" "__CUBE_PROXY_RESOLVER_DIRECTIVES__"
-  assert_contains "${ONE_CLICK_DIR}/scripts/common/validation.sh" "discover_resolver_nameservers"
-  assert_contains "${ONE_CLICK_DIR}/scripts/common/validation.sh" "build_cube_proxy_resolver_directives"
-  assert_contains "${ONE_CLICK_DIR}/scripts/common/validation.sh" "ensure_hostname_target_has_resolver"
-  assert_contains "${ONE_CLICK_DIR}/scripts/one-click/common.sh" 'source "${ONE_CLICK_RUNTIME_SCRIPT_DIR}/../common/validation.sh"'
+  assert_contains "${ROOT_DIR}/CubeProxy/Dockerfile" "COPY nginx.conf /usr/local/openresty/nginx/conf/nginx.conf.template"
+  assert_contains "${ROOT_DIR}/CubeProxy/nginx.conf" "__CUBE_PROXY_RESOLVER_DIRECTIVES__"
+  assert_contains "${ROOT_DIR}/CubeProxy/nginx.conf" "__CUBE_PROXY_HTTP_PORT__"
+  assert_contains "${ROOT_DIR}/CubeProxy/nginx.conf" "__CUBE_PROXY_HTTPS_PORT__"
+  assert_contains "${ROOT_DIR}/CubeProxy/start.sh" "render_nginx_config"
+  assert_contains "${ROOT_DIR}/CubeProxy/start.sh" "discover_resolver_nameservers"
+  assert_contains "${ROOT_DIR}/CubeProxy/start.sh" "ensure_hostname_target_has_resolver"
+  assert_contains "${ONE_CLICK_DIR}/cubeproxy/docker-compose.yaml.template" "CUBE_PROXY_NGINX_RESOLVER"
+  assert_contains "${ONE_CLICK_DIR}/cubeproxy/docker-compose.yaml.template" "CUBE_PROXY_HTTP_PORT"
+  assert_contains "${ONE_CLICK_DIR}/cubeproxy/docker-compose.yaml.template" "CUBE_PROXY_HTTPS_PORT"
+  if grep -Fq "/usr/local/openresty/nginx/conf/nginx.conf:ro" "${ONE_CLICK_DIR}/cubeproxy/docker-compose.yaml.template"; then
+    fail "cube-proxy docker-compose template should no longer bind-mount nginx.conf"
+  fi
+  if grep -Fq "generate_cube_proxy_nginx_template" "${ONE_CLICK_DIR}/build-release-bundle.sh"; then
+    fail "build-release-bundle.sh should no longer generate a host-side cube-proxy nginx template"
+  fi
+  if grep -Fq "__CUBE_PROXY_RESOLVER_DIRECTIVES__" "${ONE_CLICK_DIR}/build-release-bundle.sh"; then
+    fail "build-release-bundle.sh should no longer inject cube-proxy resolver placeholders"
+  fi
   assert_contains "${ONE_CLICK_DIR}/scripts/one-click/up-cube-proxy.sh" "CUBE_PROXY_NGINX_RESOLVER"
-  assert_contains "${ONE_CLICK_DIR}/scripts/one-click/up-cube-proxy.sh" "ensure_hostname_target_has_resolver"
+  if grep -Fq "ensure_hostname_target_has_resolver" "${ONE_CLICK_DIR}/scripts/one-click/up-cube-proxy.sh"; then
+    fail "up-cube-proxy.sh should not perform resolver discovery or fail-fast itself anymore"
+  fi
 }
 
 test_explicit_install_mode
@@ -746,11 +787,11 @@ test_compute_control_plane_preflight
 test_patch_cubelet_config_template_refuses_symlink
 test_upgrade_preflight_and_backup
 test_validation_library_fallback_die
-test_runtime_discover_resolver_nameservers
-test_runtime_cube_proxy_resolver_directives
-test_runtime_hostname_target_requires_resolver
-test_runtime_cube_proxy_nginx_resolver_render
-test_runtime_cube_proxy_nginx_empty_resolver_render
+test_cube_proxy_start_discover_resolver_nameservers
+test_cube_proxy_start_resolver_directives
+test_cube_proxy_start_hostname_target_requires_resolver
+test_cube_proxy_start_nginx_render
+test_cube_proxy_start_nginx_empty_resolver_render
 test_redis_cli_help_supports_flag
 test_run_with_timeout_if_available
 test_install_sh_wires_upgrade_flow

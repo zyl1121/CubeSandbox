@@ -1302,7 +1302,6 @@ backup_before_upgrade() {
     "cube-shim/conf/config-cube.toml" \
     "network-agent/network-agent.yaml" \
     "cubeproxy/global.conf" \
-    "cubeproxy/nginx.conf" \
     "coredns/Corefile" \
     "coredns/resolv.conf.upstream" \
     "webui/nginx.generated.conf"

@@ -253,7 +253,6 @@ one_click_runtime_file_paths() {
 
   printf '%s\n' \
     "${INSTALL_PREFIX}/cubeproxy/global.conf" \
-    "${INSTALL_PREFIX}/cubeproxy/nginx.conf" \
     "${INSTALL_PREFIX}/webui/nginx.generated.conf" \
     "${INSTALL_PREFIX}/coredns/Corefile" \
     "${INSTALL_PREFIX}/coredns/resolv.conf.upstream"
