@@ -64,7 +64,7 @@ CALL cubemaster_add_column_if_missing('t_cube_template_image_job', 'resource_id'
 -- Step (C.1): fill empty request_id with 'legacy-' + job_id.
 UPDATE `t_cube_template_image_job`
    SET `request_id` = CONCAT('legacy-', `job_id`)
- WHERE `request_id` = '' AND `job_id` <> '';
+ WHERE `id` > 0 AND `request_id` = '' AND `job_id` <> '';
 
 -- Step (C.2): infer operation for rows where it is empty (UPPERCASE values
 -- matching JobOperationCommit / Create / Redo / Legacy in Go).
@@ -75,7 +75,7 @@ UPDATE `t_cube_template_image_job`
          WHEN TRIM(`source_image_ref`) <> '' AND TRIM(`retry_of_job_id`) <> ''                        THEN 'REDO'
          ELSE 'LEGACY'
        END
- WHERE `operation` = '';
+ WHERE `id` > 0 AND `operation` = '';
 
 -- Step (C.3): break ties for any remaining (request_id, operation) duplicates
 -- by appending the job_id to request_id of the older rows. This preserves
@@ -98,7 +98,8 @@ UPDATE `t_cube_template_image_job` t
   ) dup
     ON dup.request_id = t.request_id AND dup.operation = t.operation
    AND t.id <> dup.keep_id
-   SET t.`request_id` = CONCAT(t.`request_id`, '#', t.`job_id`);
+   SET t.`request_id` = CONCAT(t.`request_id`, '#', t.`job_id`)
+ WHERE t.id > 0;
 
 -- (D) t_cube_template_image_job: add HEAD's three new indexes. We do NOT
 -- recreate idx_template_image_request_id / template_status / template_attempt

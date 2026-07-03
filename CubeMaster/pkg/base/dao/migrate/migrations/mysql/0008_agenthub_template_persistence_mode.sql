@@ -45,7 +45,8 @@ DEALLOCATE PREPARE stmt;
 UPDATE t_agenthub_template t
 JOIN t_agenthub_instance i ON i.agent_id = t.source_agent_id AND i.deleted_at IS NULL
 SET t.persistence_mode = i.persistence_mode
-WHERE t.persistence_mode IS NULL
+WHERE t.id > 0
+  AND t.persistence_mode IS NULL
   AND t.source_agent_id <> 'market';
 
 SELECT RELEASE_LOCK('cubemaster_migration_0008_agenthub_template_persistence_mode');

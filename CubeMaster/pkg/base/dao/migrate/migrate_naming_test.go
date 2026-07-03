@@ -127,3 +127,41 @@ func TestMigrationsDirHasReadme(t *testing.T) {
 		t.Errorf("expected migration policy doc at %s: %v", readme, err)
 	}
 }
+
+func TestHistoricalUpdateMigrationsUseKeyedWhereClauses(t *testing.T) {
+	cases := []struct {
+		path    string
+		snippet string
+	}{
+		{
+			path:    filepath.Join("migrations", "mysql", "0002_v0_2_2_to_head.sql"),
+			snippet: "WHERE `id` > 0 AND `request_id` = '' AND `job_id` <> '';",
+		},
+		{
+			path:    filepath.Join("migrations", "mysql", "0002_v0_2_2_to_head.sql"),
+			snippet: "WHERE `id` > 0 AND `operation` = '';",
+		},
+		{
+			path:    filepath.Join("migrations", "mysql", "0002_v0_2_2_to_head.sql"),
+			snippet: "WHERE t.id > 0;",
+		},
+		{
+			path:    filepath.Join("migrations", "mysql", "0008_agenthub_template_persistence_mode.sql"),
+			snippet: "WHERE t.id > 0\n  AND t.persistence_mode IS NULL",
+		},
+		{
+			path:    filepath.Join("migrations", "mysql", "20260624121500_template_definition_rootfs_artifact_id.sql"),
+			snippet: "WHERE d.id > 0;",
+		},
+	}
+
+	for _, tc := range cases {
+		content, err := os.ReadFile(tc.path)
+		if err != nil {
+			t.Fatalf("read %s: %v", tc.path, err)
+		}
+		if !strings.Contains(string(content), tc.snippet) {
+			t.Errorf("%s: expected keyed safe-update guard %q", tc.path, tc.snippet)
+		}
+	}
+}

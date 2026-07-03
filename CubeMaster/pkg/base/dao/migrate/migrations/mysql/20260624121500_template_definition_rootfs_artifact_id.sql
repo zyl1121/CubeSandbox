@@ -20,7 +20,8 @@ JOIN `t_cube_rootfs_artifact` AS a
   ON d.`rootfs_artifact_id` = ''
  AND a.`artifact_id` <> ''
  AND INSTR(d.`request_json`, a.`artifact_id`) > 0
-SET d.`rootfs_artifact_id` = a.`artifact_id`;
+SET d.`rootfs_artifact_id` = a.`artifact_id`
+WHERE d.id > 0;
 
 CALL cubemaster_add_index_if_missing(
   't_cube_template_definition',
