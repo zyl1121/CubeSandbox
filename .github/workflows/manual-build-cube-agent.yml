@@ -1,6 +1,6 @@
-name: Manual Build CubeAPI Artifact
+name: Manual Build Cube Agent
 
-run-name: Build cube-api from ${{ inputs.target_ref }}
+run-name: Build cube-agent from ${{ inputs.target_ref }}
 
 on:
   workflow_dispatch:
@@ -8,7 +8,7 @@ on:
       target_ref:
         description: "Branch, tag, or commit SHA to build"
         required: true
-        default: "main"
+        default: "master"
 
 permissions:
   contents: read
@@ -20,7 +20,7 @@ env:
 
 jobs:
   build:
-    name: Build CubeAPI Artifact
+    name: Build Cube Agent
     runs-on: ubuntu-latest
 
     steps:
@@ -51,7 +51,7 @@ jobs:
           echo "build_time=${build_time}" >> "${GITHUB_OUTPUT}"
 
           {
-            echo "## CubeAPI build target"
+            echo "## Cube Agent build target"
             echo ""
             echo "- Ref: \`${{ inputs.target_ref }}\`"
             echo "- Commit: \`${full_sha}\`"
@@ -107,26 +107,26 @@ jobs:
             echo "- Image: \`${image}\`"
           } >> "${GITHUB_STEP_SUMMARY}"
 
-      - name: Build CubeAPI
+      - name: Build Cube Agent
         shell: bash
         run: |
           set -euo pipefail
 
-          make cubeapi \
+          make agent \
             BUILDER_IMAGE="${{ steps.builder_image.outputs.image }}"
 
-          test -x _output/bin/cube-api
+          test -x _output/bin/cube-agent
 
           {
             echo ""
             echo "## Build output"
             echo ""
-            echo "- \`_output/bin/cube-api\`"
+            echo "- \`_output/bin/cube-agent\`"
           } >> "${GITHUB_STEP_SUMMARY}"
 
-      - name: Upload CubeAPI artifact
+      - name: Upload Cube Agent artifact
         uses: actions/upload-artifact@v4
         with:
-          name: cubeapi-binary-${{ steps.target.outputs.safe_ref }}-${{ steps.target.outputs.short_sha }}
-          path: _output/bin/cube-api
+          name: cube-agent-binary-${{ steps.target.outputs.safe_ref }}-${{ steps.target.outputs.short_sha }}
+          path: _output/bin/cube-agent
           if-no-files-found: error

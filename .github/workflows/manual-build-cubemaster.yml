@@ -1,6 +1,6 @@
-name: Manual Build CubeAPI Artifact
+name: Manual Build CubeMaster
 
-run-name: Build cube-api from ${{ inputs.target_ref }}
+run-name: Build cubemaster from ${{ inputs.target_ref }}
 
 on:
   workflow_dispatch:
@@ -8,7 +8,7 @@ on:
       target_ref:
         description: "Branch, tag, or commit SHA to build"
         required: true
-        default: "main"
+        default: "master"
 
 permissions:
   contents: read
@@ -20,7 +20,7 @@ env:
 
 jobs:
   build:
-    name: Build CubeAPI Artifact
+    name: Build CubeMaster
     runs-on: ubuntu-latest
 
     steps:
@@ -51,7 +51,7 @@ jobs:
           echo "build_time=${build_time}" >> "${GITHUB_OUTPUT}"
 
           {
-            echo "## CubeAPI build target"
+            echo "## CubeMaster build target"
             echo ""
             echo "- Ref: \`${{ inputs.target_ref }}\`"
             echo "- Commit: \`${full_sha}\`"
@@ -107,26 +107,35 @@ jobs:
             echo "- Image: \`${image}\`"
           } >> "${GITHUB_STEP_SUMMARY}"
 
-      - name: Build CubeAPI
+      - name: Build CubeMaster with version metadata
         shell: bash
+        env:
+          GIT_COMMIT: ${{ steps.target.outputs.short_sha }}
+          BUILD_DATE: ${{ steps.target.outputs.build_time }}
         run: |
           set -euo pipefail
 
-          make cubeapi \
-            BUILDER_IMAGE="${{ steps.builder_image.outputs.image }}"
+          make cubemaster \
+            BUILDER_IMAGE="${{ steps.builder_image.outputs.image }}" \
+            GIT_COMMIT="${GIT_COMMIT}" \
+            BUILD_DATE="${BUILD_DATE}"
 
-          test -x _output/bin/cube-api
+          test -x _output/bin/cubemaster
+          test -x _output/bin/cubemastercli
 
           {
             echo ""
             echo "## Build output"
             echo ""
-            echo "- \`_output/bin/cube-api\`"
+            echo "- \`_output/bin/cubemaster\`"
+            echo "- \`_output/bin/cubemastercli\`"
           } >> "${GITHUB_STEP_SUMMARY}"
 
-      - name: Upload CubeAPI artifact
+      - name: Upload CubeMaster artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: cubeapi-binary-${{ steps.target.outputs.safe_ref }}-${{ steps.target.outputs.short_sha }}
-          path: _output/bin/cube-api
+          name: cubemaster-binaries-${{ steps.target.outputs.safe_ref }}-${{ steps.target.outputs.short_sha }}
+          path: |
+            _output/bin/cubemaster
+            _output/bin/cubemastercli
           if-no-files-found: error

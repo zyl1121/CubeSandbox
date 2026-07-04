@@ -32,7 +32,7 @@ jobs:
           # 这里只是构建，不需要把 token 写进 git config
           persist-credentials: false
 
-      - name: Resolve target revision
+      - name: Resolve target revision and build metadata
         id: target
         shell: bash
         run: |
@@ -40,6 +40,7 @@ jobs:
 
           full_sha="$(git rev-parse HEAD)"
           short_sha="$(git rev-parse --short=12 HEAD)"
+          build_time="$(date -u +'%Y%m%d-%H:%M:%S')"
 
           # artifact 名字不能直接带 slash，例如 feature/foo
           safe_ref="$(printf '%s' '${{ inputs.target_ref }}' \
@@ -49,12 +50,14 @@ jobs:
           echo "full_sha=${full_sha}" >> "${GITHUB_OUTPUT}"
           echo "short_sha=${short_sha}" >> "${GITHUB_OUTPUT}"
           echo "safe_ref=${safe_ref}" >> "${GITHUB_OUTPUT}"
+          echo "build_time=${build_time}" >> "${GITHUB_OUTPUT}"
 
           {
             echo "## Cubelet build target"
             echo ""
             echo "- Ref: \`${{ inputs.target_ref }}\`"
             echo "- Commit: \`${full_sha}\`"
+            echo "- Build time: \`${build_time}\`"
           } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Log in to GitHub Container Registry
@@ -106,13 +109,18 @@ jobs:
             echo "- Image: \`${image}\`"
           } >> "${GITHUB_STEP_SUMMARY}"
 
-      - name: Build Cubelet
+      - name: Build Cubelet with version metadata
         shell: bash
+        env:
+          GIT_COMMIT: ${{ steps.target.outputs.short_sha }}
+          BUILD_DATE: ${{ steps.target.outputs.build_time }}
         run: |
           set -euo pipefail
 
           make cubelet \
-            BUILDER_IMAGE="${{ steps.builder_image.outputs.image }}"
+            BUILDER_IMAGE="${{ steps.builder_image.outputs.image }}" \
+            GIT_COMMIT="${GIT_COMMIT}" \
+            BUILD_DATE="${BUILD_DATE}"
 
           test -x _output/bin/cubelet
           test -x _output/bin/cubecli
