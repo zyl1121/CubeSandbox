@@ -23,7 +23,7 @@ use containerd_shim::protos::events::task::TaskOOM;
 use containerd_shim::protos::protobuf::MessageDyn;
 use containerd_shim::{Error, Result};
 use cube_hypervisor::config::RestoreConfig;
-use cube_hypervisor::vm_config::{DeviceConfig, FsConfig};
+use cube_hypervisor::vm_config::{DeviceConfig, FsConfig, IvshmemConfig};
 use cube_hypervisor::{SnapshotType, VmRemoveDeviceData};
 use oci_spec::runtime::{LinuxResources, Process, Spec};
 use protoc::{agent, agent_ttrpc, health, health_ttrpc};
@@ -47,6 +47,10 @@ use super::pmem::Pmem;
 //use tokio_uring::fs::UnixStream;
 
 const ANNO_SANDBOX_DNS: &str = "cube.sandbox.dns";
+const ANNO_ENABLE_IVSHMEM: &str = "cube.sandbox.enable_ivshmem";
+const IVSHMEM_DEFAULT_SIZE: usize = 1 * 1024 * 1024; // 1MB, must match to_vm_config()
+const IVSHMEM_SHM_DIR: &str = "/dev/shm";
+const IVSHMEM_PREFIX: &str = "ivshmem-";
 
 #[derive(PartialEq, Eq)]
 enum SandBoxState {
@@ -713,6 +717,7 @@ impl SandBox {
 
     pub async fn prepare_resource(&mut self) -> CResult<VmConfig> {
         let mut vc = VmConfig::default();
+        vc.sandbox_id = self.id.clone();
         vc.set_kernel(self.conf.kernel.clone())
             .set_vcpus(self.conf.vm_res.cpu)
             .set_memory(self.conf.vm_res.memory, false)
@@ -720,6 +725,20 @@ impl SandBox {
             .add_disks(&self.conf.disk)
             .add_virtiofs(&self.conf.virtiofs)
             .add_vsock(self.id.clone());
+
+        // Enable ivshmem device if requested via annotation (experimental feature).
+        // Users can opt-in by setting annotation: cube.sandbox.enable_ivshmem=true
+        // This allows testing before making it default.
+        let enable_ivshmem = self.spec.annotations()
+            .as_ref()
+            .and_then(|anno| anno.get(ANNO_ENABLE_IVSHMEM))
+            .map(|v| v == "true" || v == "1")
+            .unwrap_or(false);
+
+        if enable_ivshmem {
+            Self::enable_default_ivshmem(&mut vc)
+                .map_err(|e| format!("failed to enable ivshmem: {}", e))?;
+        }
 
         if let Some(fs) = self.conf.fs.as_ref() {
             vc.add_fs(fs);
@@ -758,6 +777,74 @@ impl SandBox {
     }
 
     pub async fn recycle_resource(&mut self) -> CResult<()> {
+        Ok(())
+    }
+
+    /// Get ivshmem shared memory file path for a sandbox.
+    /// Returns `/dev/shm/ivshmem-{sandbox_id}`.
+    pub fn ivshmem_path(sandbox_id: &str) -> PathBuf {
+        PathBuf::from(format!("{}/{}{}", IVSHMEM_SHM_DIR, IVSHMEM_PREFIX, sandbox_id))
+    }
+
+    /// Validate sandbox_id to prevent path traversal attacks.
+    fn validate_sandbox_id(id: &str) -> CResult<()> {
+        if id.is_empty() || id.len() > 255 {
+            return Err("invalid sandbox_id length".into());
+        }
+        if id.contains("..") || id.contains('/') || id.contains('\\') {
+            return Err("sandbox_id contains invalid path characters".into());
+        }
+        Ok(())
+    }
+
+    /// Enable default ivshmem device with standard naming convention.
+    /// Creates shared memory file at `/dev/shm/ivshmem-{sandbox_id}`.
+    fn enable_default_ivshmem(vc: &mut VmConfig) -> CResult<()> {
+        Self::validate_sandbox_id(&vc.sandbox_id)?;
+        let path = Self::ivshmem_path(&vc.sandbox_id);
+
+        use std::os::unix::fs::OpenOptionsExt;
+        let f = stdfs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .mode(0o600)  // Owner read/write only for security
+            .open(&path)
+            .map_err(|e| format!("failed to create ivshmem file {}: {}", path.display(), e))?;
+
+        f.set_len(IVSHMEM_DEFAULT_SIZE as u64)
+            .map_err(|e| format!("failed to set ivshmem file size: {}", e))?;
+
+        vc.enable_ivshmem(path, IVSHMEM_DEFAULT_SIZE);
+        Ok(())
+    }
+
+    /// Create ivshmem config for restore path with default naming.
+    fn default_ivshmem_config(sandbox_id: &str) -> CResult<IvshmemConfig> {
+        Self::validate_sandbox_id(sandbox_id)?;
+        let path = Self::ivshmem_path(sandbox_id);
+        Ok(IvshmemConfig { path, size: IVSHMEM_DEFAULT_SIZE })
+    }
+
+    /// Ensure ivshmem shm file exists (create if not exists). No-op if already present.
+    /// Used by restore path: hot-path create, resume, snapshot-based create.
+    fn ensure_ivshmem_file(sandbox_id: &str) -> CResult<()> {
+        Self::validate_sandbox_id(sandbox_id)?;
+        let path = Self::ivshmem_path(sandbox_id);
+
+        if !stdfs::metadata(&path).is_ok() {
+            use std::os::unix::fs::OpenOptionsExt;
+            let f = stdfs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .mode(0o600)  // Owner read/write only for security
+                .open(&path)
+                .map_err(|e| format!("failed to create ivshmem file {}: {}", path.display(), e))?;
+
+            f.set_len(IVSHMEM_DEFAULT_SIZE as u64)
+                .map_err(|e| format!("failed to set ivshmem file size: {}", e))?;
+        }
         Ok(())
     }
 
@@ -836,6 +923,18 @@ impl SandBox {
     }
 
     async fn restore_vm(&mut self) -> CResult<()> {
+        // Ensure ivshmem shm file exists if feature is enabled (experimental).
+        // Check annotation to determine if ivshmem should be enabled.
+        let enable_ivshmem = self.spec.annotations()
+            .as_ref()
+            .and_then(|anno| anno.get(ANNO_ENABLE_IVSHMEM))
+            .map(|v| v == "true" || v == "1")
+            .unwrap_or(false);
+
+        if enable_ivshmem {
+            Self::ensure_ivshmem_file(&self.id)?;
+        }
+
         let ss_file = SnapshotInfo::load(
             self.conf.snapshot_base.as_str(),
             self.conf.vm_res.cpu,
@@ -882,6 +981,11 @@ impl SandBox {
             pmem: Some(pmems),
             vsock: Some(vsock),
             memory_vol_url: restore_memory_vol_url,
+            ivshmem: if enable_ivshmem {
+                Some(Self::default_ivshmem_config(&self.id)?)
+            } else {
+                None
+            },
             ..Default::default()
         };
 

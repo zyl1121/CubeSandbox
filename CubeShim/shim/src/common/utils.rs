@@ -163,12 +163,28 @@ impl Utils {
             )),
         };
 
+        //delete ivshmem shared memory file
+        let ivshmem_path = crate::sandbox::sb::SandBox::ivshmem_path(sandbox_id);
+        let ret_ivshmem: Result<(), String> = match fs::remove_file(&ivshmem_path) {
+            Ok(_) => Ok(()),
+            Err(e) if e.kind() == ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(format!(
+                "failed to delete {}: {}",
+                ivshmem_path.display(),
+                e
+            )),
+        };
+
         let mut err_msg = String::new();
         if let Err(e) = ret_vmdir {
             err_msg = err_msg + e.as_str();
         }
 
         if let Err(e) = ret_pausedir {
+            err_msg = err_msg + e.as_str();
+        }
+
+        if let Err(e) = ret_ivshmem {
             err_msg = err_msg + e.as_str();
         }
 
