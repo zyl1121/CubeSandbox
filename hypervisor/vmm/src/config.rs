@@ -2123,6 +2123,10 @@ pub struct RestoreConfig {
     /// source_url/<SNAPSHOT_FILENAME>.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub memory_vol_url: Option<String>,
+    /// Optional ivshmem shared memory device configuration.
+    /// When present, the VM will have an ivshmem device for host-guest communication.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ivshmem: Option<IvshmemConfig>,
 }
 
 impl RestoreConfig {
@@ -2167,6 +2171,7 @@ impl RestoreConfig {
             pmem: None,
             dirty_log,
             memory_vol_url,
+            ivshmem: None,
         })
     }
 }

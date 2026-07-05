@@ -130,6 +130,13 @@ impl SandboxService {
         ]);
 
         let labels = body.metadata.map(|mut meta| {
+            // Map user-friendly metadata to internal annotations
+            if let Some(value) = meta.remove("enable_ivshmem") {
+                if value == "true" || value == "1" {
+                    annotations.insert("cube.master.enable_ivshmem".to_string(), "true".to_string());
+                }
+            }
+
             if let Some(value) = meta.remove(HOSTDIR_MOUNT_KEY) {
                 annotations.insert(HOSTDIR_MOUNT_KEY.to_string(), value);
             }

@@ -44,6 +44,23 @@ pub const DISK_DEVICE_ID_PRE: &str = "disk";
 pub struct Utils {}
 pub struct AsyncUtils {}
 impl Utils {
+    /// Validate sandbox_id to prevent path traversal attacks.
+    fn validate_sandbox_id(id: &str) -> CResult<()> {
+        if id.is_empty() || id.len() > 255 {
+            return Err("invalid sandbox_id length".into());
+        }
+        if id.contains("..") || id.contains('/') || id.contains('\\') {
+            return Err("sandbox_id contains invalid path characters".into());
+        }
+        Ok(())
+    }
+
+    /// Get ivshmem shared memory file path for a sandbox.
+    /// Returns `/dev/shm/ivshmem-{sandbox_id}`.
+    pub fn ivshmem_path(sandbox_id: &str) -> CResult<PathBuf> {
+        Ok(PathBuf::from(format!("/dev/shm/ivshmem-{}", sandbox_id)))
+    }
+
     pub fn load_spec(bundle: &str) -> CResult<Spec> {
         let mut conf_path = PathBuf::from(bundle);
         conf_path.push("config.json");
@@ -164,7 +181,7 @@ impl Utils {
         };
 
         //delete ivshmem shared memory file
-        let ivshmem_path = crate::sandbox::sb::SandBox::ivshmem_path(sandbox_id);
+        let ivshmem_path = Self::ivshmem_path(sandbox_id)?;
         let ret_ivshmem: Result<(), String> = match fs::remove_file(&ivshmem_path) {
             Ok(_) => Ok(()),
             Err(e) if e.kind() == ErrorKind::NotFound => Ok(()),

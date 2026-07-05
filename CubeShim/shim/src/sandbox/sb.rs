@@ -47,10 +47,8 @@ use super::pmem::Pmem;
 //use tokio_uring::fs::UnixStream;
 
 const ANNO_SANDBOX_DNS: &str = "cube.sandbox.dns";
-const ANNO_ENABLE_IVSHMEM: &str = "cube.sandbox.enable_ivshmem";
-const IVSHMEM_DEFAULT_SIZE: usize = 1 * 1024 * 1024; // 1MB, must match to_vm_config()
-const IVSHMEM_SHM_DIR: &str = "/dev/shm";
-const IVSHMEM_PREFIX: &str = "ivshmem-";
+const ANNO_ENABLE_IVSHMEM: &str = "cube.master.enable_ivshmem";
+const IVSHMEM_DEFAULT_SIZE: usize = 1 * 1024 * 1024; // 1MB
 
 #[derive(PartialEq, Eq)]
 enum SandBoxState {
@@ -780,28 +778,10 @@ impl SandBox {
         Ok(())
     }
 
-    /// Get ivshmem shared memory file path for a sandbox.
-    /// Returns `/dev/shm/ivshmem-{sandbox_id}`.
-    pub fn ivshmem_path(sandbox_id: &str) -> PathBuf {
-        PathBuf::from(format!("{}/{}{}", IVSHMEM_SHM_DIR, IVSHMEM_PREFIX, sandbox_id))
-    }
-
-    /// Validate sandbox_id to prevent path traversal attacks.
-    fn validate_sandbox_id(id: &str) -> CResult<()> {
-        if id.is_empty() || id.len() > 255 {
-            return Err("invalid sandbox_id length".into());
-        }
-        if id.contains("..") || id.contains('/') || id.contains('\\') {
-            return Err("sandbox_id contains invalid path characters".into());
-        }
-        Ok(())
-    }
-
     /// Enable default ivshmem device with standard naming convention.
     /// Creates shared memory file at `/dev/shm/ivshmem-{sandbox_id}`.
     fn enable_default_ivshmem(vc: &mut VmConfig) -> CResult<()> {
-        Self::validate_sandbox_id(&vc.sandbox_id)?;
-        let path = Self::ivshmem_path(&vc.sandbox_id);
+        let path = Utils::ivshmem_path(&vc.sandbox_id)?;
 
         use std::os::unix::fs::OpenOptionsExt;
         let f = stdfs::OpenOptions::new()
@@ -821,16 +801,14 @@ impl SandBox {
 
     /// Create ivshmem config for restore path with default naming.
     fn default_ivshmem_config(sandbox_id: &str) -> CResult<IvshmemConfig> {
-        Self::validate_sandbox_id(sandbox_id)?;
-        let path = Self::ivshmem_path(sandbox_id);
+        let path = Utils::ivshmem_path(sandbox_id)?;
         Ok(IvshmemConfig { path, size: IVSHMEM_DEFAULT_SIZE })
     }
 
     /// Ensure ivshmem shm file exists (create if not exists). No-op if already present.
     /// Used by restore path: hot-path create, resume, snapshot-based create.
     fn ensure_ivshmem_file(sandbox_id: &str) -> CResult<()> {
-        Self::validate_sandbox_id(sandbox_id)?;
-        let path = Self::ivshmem_path(sandbox_id);
+        let path = Utils::ivshmem_path(sandbox_id)?;
 
         if !stdfs::metadata(&path).is_ok() {
             use std::os::unix::fs::OpenOptionsExt;
