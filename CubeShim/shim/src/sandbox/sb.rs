@@ -782,19 +782,7 @@ impl SandBox {
     /// Creates shared memory file at `/dev/shm/ivshmem-{sandbox_id}`.
     fn enable_default_ivshmem(vc: &mut VmConfig) -> CResult<()> {
         let path = Utils::ivshmem_path(&vc.sandbox_id)?;
-
-        use std::os::unix::fs::OpenOptionsExt;
-        let f = stdfs::OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .mode(0o600)  // Owner read/write only for security
-            .open(&path)
-            .map_err(|e| format!("failed to create ivshmem file {}: {}", path.display(), e))?;
-
-        f.set_len(IVSHMEM_DEFAULT_SIZE as u64)
-            .map_err(|e| format!("failed to set ivshmem file size: {}", e))?;
-
+        Utils::create_ivshmem_file(&path, IVSHMEM_DEFAULT_SIZE)?;
         vc.enable_ivshmem(path, IVSHMEM_DEFAULT_SIZE);
         Ok(())
     }
@@ -802,26 +790,18 @@ impl SandBox {
     /// Create ivshmem config for restore path with default naming.
     fn default_ivshmem_config(sandbox_id: &str) -> CResult<IvshmemConfig> {
         let path = Utils::ivshmem_path(sandbox_id)?;
-        Ok(IvshmemConfig { path, size: IVSHMEM_DEFAULT_SIZE })
+        Ok(IvshmemConfig {
+            path,
+            size: IVSHMEM_DEFAULT_SIZE,
+        })
     }
 
     /// Ensure ivshmem shm file exists (create if not exists). No-op if already present.
     /// Used by restore path: hot-path create, resume, snapshot-based create.
     fn ensure_ivshmem_file(sandbox_id: &str) -> CResult<()> {
         let path = Utils::ivshmem_path(sandbox_id)?;
-
         if !stdfs::metadata(&path).is_ok() {
-            use std::os::unix::fs::OpenOptionsExt;
-            let f = stdfs::OpenOptions::new()
-                .create(true)
-                .write(true)
-                .truncate(true)
-                .mode(0o600)  // Owner read/write only for security
-                .open(&path)
-                .map_err(|e| format!("failed to create ivshmem file {}: {}", path.display(), e))?;
-
-            f.set_len(IVSHMEM_DEFAULT_SIZE as u64)
-                .map_err(|e| format!("failed to set ivshmem file size: {}", e))?;
+            Utils::create_ivshmem_file(&path, IVSHMEM_DEFAULT_SIZE)?;
         }
         Ok(())
     }

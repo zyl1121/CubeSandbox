@@ -2413,6 +2413,14 @@ impl VmConfig {
         }
     }
 
+    pub fn update_ivshmem(&mut self, ivshmem_cfg: &IvshmemConfig) {
+        if let Some(ivshmem) = &mut self.ivshmem {
+            // Update path and size from restore config
+            ivshmem.path = ivshmem_cfg.path.clone();
+            ivshmem.size = ivshmem_cfg.size;
+        }
+    }
+
     pub fn update_pmem(&mut self, pmem_cfgs: &[PmemConfig]) {
         if let Some(pmems) = &mut self.pmem {
             let mut new_cfgs: HashMap<String, PathBuf> = HashMap::default();
