@@ -2415,9 +2415,10 @@ impl VmConfig {
 
     pub fn update_ivshmem(&mut self, ivshmem_cfg: &IvshmemConfig) {
         if let Some(ivshmem) = &mut self.ivshmem {
-            // Update path and size from restore config
             ivshmem.path = ivshmem_cfg.path.clone();
             ivshmem.size = ivshmem_cfg.size;
+        } else {
+            self.ivshmem = Some(ivshmem_cfg.clone());
         }
     }
 
@@ -3412,6 +3413,41 @@ mod tests {
             }
         );
         Ok(())
+    }
+
+    #[test]
+    fn test_update_ivshmem_inserts_when_missing() {
+        let mut vm_config = VmConfig {
+            ivshmem: None,
+            ..Default::default()
+        };
+        let restore_ivshmem = IvshmemConfig {
+            path: PathBuf::from("/dev/shm/ivshmem-sandbox"),
+            size: 1024 * 1024,
+        };
+
+        vm_config.update_ivshmem(&restore_ivshmem);
+
+        assert_eq!(vm_config.ivshmem, Some(restore_ivshmem));
+    }
+
+    #[test]
+    fn test_update_ivshmem_updates_existing_backend() {
+        let mut vm_config = VmConfig {
+            ivshmem: Some(IvshmemConfig {
+                path: PathBuf::from("/dev/shm/ivshmem-template"),
+                size: 512 * 1024,
+            }),
+            ..Default::default()
+        };
+        let restore_ivshmem = IvshmemConfig {
+            path: PathBuf::from("/dev/shm/ivshmem-sandbox"),
+            size: 1024 * 1024,
+        };
+
+        vm_config.update_ivshmem(&restore_ivshmem);
+
+        assert_eq!(vm_config.ivshmem, Some(restore_ivshmem));
     }
 
     #[test]

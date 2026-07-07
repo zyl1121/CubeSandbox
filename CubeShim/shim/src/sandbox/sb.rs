@@ -725,15 +725,9 @@ impl SandBox {
             .add_vsock(self.id.clone());
 
         // Enable ivshmem device if requested via annotation (experimental feature).
-        // Users can opt-in by setting annotation: cube.sandbox.enable_ivshmem=true
+        // Users opt in via metadata.enable_ivshmem; CubeAPI maps it here.
         // This allows testing before making it default.
-        let enable_ivshmem = self.spec.annotations()
-            .as_ref()
-            .and_then(|anno| anno.get(ANNO_ENABLE_IVSHMEM))
-            .map(|v| v == "true" || v == "1")
-            .unwrap_or(false);
-
-        if enable_ivshmem {
+        if self.is_ivshmem_enabled() {
             Self::enable_default_ivshmem(&mut vc)
                 .map_err(|e| format!("failed to enable ivshmem: {}", e))?;
         }
@@ -776,6 +770,15 @@ impl SandBox {
 
     pub async fn recycle_resource(&mut self) -> CResult<()> {
         Ok(())
+    }
+
+    fn is_ivshmem_enabled(&self) -> bool {
+        self.spec
+            .annotations()
+            .as_ref()
+            .and_then(|anno| anno.get(ANNO_ENABLE_IVSHMEM))
+            .map(|v| v == "true" || v == "1")
+            .unwrap_or(false)
     }
 
     /// Enable default ivshmem device with standard naming convention.
@@ -883,11 +886,7 @@ impl SandBox {
     async fn restore_vm(&mut self) -> CResult<()> {
         // Ensure ivshmem shm file exists if feature is enabled (experimental).
         // Check annotation to determine if ivshmem should be enabled.
-        let enable_ivshmem = self.spec.annotations()
-            .as_ref()
-            .and_then(|anno| anno.get(ANNO_ENABLE_IVSHMEM))
-            .map(|v| v == "true" || v == "1")
-            .unwrap_or(false);
+        let enable_ivshmem = self.is_ivshmem_enabled();
 
         if enable_ivshmem {
             Self::ensure_ivshmem_file(&self.id)?;

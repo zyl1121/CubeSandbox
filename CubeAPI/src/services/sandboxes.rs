@@ -130,16 +130,7 @@ impl SandboxService {
         ]);
 
         let labels = body.metadata.map(|mut meta| {
-            // Map user-friendly metadata to internal annotations
-            if let Some(value) = meta.remove("enable_ivshmem") {
-                if value == "true" || value == "1" {
-                    annotations.insert("cube.master.enable_ivshmem".to_string(), "true".to_string());
-                }
-            }
-
-            if let Some(value) = meta.remove(HOSTDIR_MOUNT_KEY) {
-                annotations.insert(HOSTDIR_MOUNT_KEY.to_string(), value);
-            }
+            apply_special_metadata(&mut meta, &mut annotations);
             meta
         });
 
@@ -700,6 +691,21 @@ fn optional_metadata(metadata: HashMap<String, String>) -> Option<HashMap<String
     }
 }
 
+fn apply_special_metadata(
+    metadata: &mut HashMap<String, String>,
+    annotations: &mut HashMap<String, String>,
+) {
+    if let Some(value) = metadata.remove("enable_ivshmem") {
+        if value == "true" || value == "1" {
+            annotations.insert("cube.master.enable_ivshmem".to_string(), "true".to_string());
+        }
+    }
+
+    if let Some(value) = metadata.remove(HOSTDIR_MOUNT_KEY) {
+        annotations.insert(HOSTDIR_MOUNT_KEY.to_string(), value);
+    }
+}
+
 fn to_log_entry(log: crate::cubemaster::SandboxLogLine) -> SandboxLogEntry {
     let level = match log.level.to_lowercase().as_str() {
         "debug" => ModelLogLevel::Debug,
@@ -788,7 +794,10 @@ fn map_egress_rule(rule: &EgressRule) -> CubeEgressRule {
 mod tests {
     use std::collections::HashMap;
 
-    use super::{build_cube_network_config, filter_by_metadata, from_cubemaster_info};
+    use super::{
+        apply_special_metadata, build_cube_network_config, filter_by_metadata,
+        from_cubemaster_info, HOSTDIR_MOUNT_KEY,
+    };
     use crate::cubemaster::{CreateSandboxRequest, ListSandboxResponse, SandboxInfo};
     use crate::models::{
         EgressRule, EgressRuleAction, EgressRuleInject, EgressRuleMatch, SandboxNetworkConfig,
@@ -809,6 +818,62 @@ mod tests {
         ));
         assert!(!filter_by_metadata(Some(&metadata), Some("user=bob")));
         assert!(!filter_by_metadata(None, Some("user=alice")));
+    }
+
+    #[test]
+    fn special_metadata_maps_ivshmem_and_hostdir_annotations() {
+        let mut metadata = HashMap::from([
+            ("enable_ivshmem".to_string(), "true".to_string()),
+            (HOSTDIR_MOUNT_KEY.to_string(), "/tmp/demo".to_string()),
+            ("user".to_string(), "alice".to_string()),
+        ]);
+        let mut annotations = HashMap::new();
+
+        apply_special_metadata(&mut metadata, &mut annotations);
+
+        assert_eq!(
+            annotations.get("cube.master.enable_ivshmem"),
+            Some(&"true".to_string())
+        );
+        assert_eq!(
+            annotations.get(HOSTDIR_MOUNT_KEY),
+            Some(&"/tmp/demo".to_string())
+        );
+        assert_eq!(metadata.get("user"), Some(&"alice".to_string()));
+        assert!(!metadata.contains_key("enable_ivshmem"));
+        assert!(!metadata.contains_key(HOSTDIR_MOUNT_KEY));
+    }
+
+    #[test]
+    fn special_metadata_accepts_numeric_ivshmem_toggle() {
+        let mut metadata = HashMap::from([
+            ("enable_ivshmem".to_string(), "1".to_string()),
+            ("name".to_string(), "demo".to_string()),
+        ]);
+        let mut annotations = HashMap::new();
+
+        apply_special_metadata(&mut metadata, &mut annotations);
+
+        assert_eq!(
+            annotations.get("cube.master.enable_ivshmem"),
+            Some(&"true".to_string())
+        );
+        assert_eq!(metadata.get("name"), Some(&"demo".to_string()));
+    }
+
+    #[test]
+    fn special_metadata_ignores_false_ivshmem_toggle() {
+        let mut metadata = HashMap::from([
+            ("enable_ivshmem".to_string(), "false".to_string()),
+            ("name".to_string(), "demo".to_string()),
+        ]);
+        let mut annotations = HashMap::new();
+
+        apply_special_metadata(&mut metadata, &mut annotations);
+
+        assert!(!annotations.contains_key("cube.master.enable_ivshmem"));
+        assert_eq!(metadata.get("name"), Some(&"demo".to_string()));
+        assert!(!metadata.contains_key("enable_ivshmem"));
     }
 
     #[test]

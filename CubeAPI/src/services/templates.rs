@@ -109,34 +109,7 @@ impl TemplateService {
         &self,
         body: CreateTemplateRequest,
     ) -> AppResult<TemplateBuildJob> {
-        if body.image.trim().is_empty() {
-            return Err(AppError::BadRequest("image is required".to_string()));
-        }
-
-        let dns_servers = validate_dns_servers(body.dns.as_deref())?;
-        let container_overrides = build_template_container_overrides(&body, dns_servers.as_deref());
-        let cube_network_config = build_template_cube_network_config(&body)?;
-
-        let req = CreateTemplateFromImageReq {
-            request_id: new_request_id(),
-            instance_type: body
-                .instance_type
-                .unwrap_or_else(|| self.instance_type.clone()),
-            // template_id is intentionally left empty — CubeMaster always
-            // auto-generates it with the "tpl-" prefix via
-            // normalizeTemplateImageRequest.
-            template_id: String::new(),
-            source_image_ref: body.image.trim().to_string(),
-            writable_layer_size: body.writable_layer_size,
-            exposed_ports: body.exposed_ports,
-            network_type: non_empty_option(body.network_type),
-            registry_username: non_empty_option(body.registry_username),
-            registry_password: non_empty_option(body.registry_password),
-            distribution_scope: non_empty_vec(body.nodes),
-            container_overrides,
-            cube_network_config,
-            with_cube_ca: body.with_cube_ca,
-        };
+        let req = build_create_template_from_image_req(&self.instance_type, body)?;
 
         let resp = self
             .cubemaster
@@ -507,6 +480,41 @@ fn build_template_cube_network_config(
     }))
 }
 
+fn build_create_template_from_image_req(
+    default_instance_type: &str,
+    body: CreateTemplateRequest,
+) -> AppResult<CreateTemplateFromImageReq> {
+    if body.image.trim().is_empty() {
+        return Err(AppError::BadRequest("image is required".to_string()));
+    }
+
+    let dns_servers = validate_dns_servers(body.dns.as_deref())?;
+    let container_overrides = build_template_container_overrides(&body, dns_servers.as_deref());
+    let cube_network_config = build_template_cube_network_config(&body)?;
+
+    Ok(CreateTemplateFromImageReq {
+        request_id: new_request_id(),
+        instance_type: body
+            .instance_type
+            .unwrap_or_else(|| default_instance_type.to_string()),
+        // template_id is intentionally left empty — CubeMaster always
+        // auto-generates it with the "tpl-" prefix via
+        // normalizeTemplateImageRequest.
+        template_id: String::new(),
+        source_image_ref: body.image.trim().to_string(),
+        writable_layer_size: body.writable_layer_size,
+        exposed_ports: body.exposed_ports,
+        network_type: non_empty_option(body.network_type),
+        registry_username: non_empty_option(body.registry_username),
+        registry_password: non_empty_option(body.registry_password),
+        distribution_scope: non_empty_vec(body.nodes),
+        container_overrides,
+        cube_network_config,
+        enable_ivshmem: body.enable_ivshmem,
+        with_cube_ca: body.with_cube_ca,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -533,6 +541,7 @@ mod tests {
             dns: Some(vec!["8.8.8.8".to_string(), "1.1.1.1".to_string()]),
             allow_out: Some(vec!["172.67.0.0/16".to_string()]),
             deny_out: Some(vec!["10.0.0.0/8".to_string()]),
+            enable_ivshmem: Some(true),
             with_cube_ca: Some(false),
         }
     }
@@ -593,6 +602,16 @@ mod tests {
             .expect("cube_network_config");
         assert_eq!(cfg.allow_internet_access, Some(false));
         assert_eq!(cfg.allow_out, vec!["api.example.com".to_string()]);
+    }
+
+    #[test]
+    fn build_create_template_from_image_req_maps_ivshmem_flag() {
+        let req = build_create_template_from_image_req("cubebox", sample_request())
+            .expect("template request should be valid");
+
+        assert_eq!(req.instance_type, "cubebox");
+        assert_eq!(req.enable_ivshmem, Some(true));
+        assert_eq!(req.source_image_ref, "python:3.11-slim");
     }
 
     #[test]

@@ -4463,6 +4463,8 @@ impl DeviceManager {
                                 guard.restore(*snapshot)?;
                                 Ok(())
                             }));
+                        } else if can_restore_without_device_snapshot(&node.id) {
+                            debug!("Skipping missing restore snapshot for {}", node.id);
                         } else {
                             return Err(MigratableError::Restore(anyhow!(
                                 "Missing device {}",
@@ -4946,6 +4948,10 @@ impl Migratable for DeviceManager {
         }
         Ok(())
     }
+}
+
+fn can_restore_without_device_snapshot(id: &str) -> bool {
+    id == IVSHMEM_DEVICE_NAME
 }
 
 const PCIU_FIELD_OFFSET: u64 = 0;
