@@ -54,6 +54,7 @@ GIT_COMMIT_SHORT ?= $(shell echo $(CUBE_COMMIT) | cut -c1-7)
 TAG?=release-$(APP_VERSION)-$(GIT_COMMIT_SHORT)-$(DATE)
 DEVTAG?=dev-$(APP_VERSION)-$(GIT_COMMIT_SHORT)-$(DATE)
 # COVERAGE_PACKAGES keeps the default test target focused on unit-style packages.
+# This also makes CubeMaster-only diffs easy to validate in the unit-test workflow.
 # Integration tests have their own dedicated entrypoints below.
 COVERAGE_PACKAGES=$(shell go list ./... \
 	| grep -v github.com/tencentcloud/CubeSandbox/CubeMaster/cmd \
