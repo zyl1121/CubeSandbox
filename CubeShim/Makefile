@@ -10,6 +10,7 @@ GID = $(shell id -g)
 PWD = $(shell pwd)
 
 .PHONY: all fmt test
+# Keep a local test target so workflow trigger checks can exercise CubeShim directly.
 all:
 	cargo build --release
 
