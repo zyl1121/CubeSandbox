@@ -98,7 +98,6 @@ help:
 	@printf "  cubeapi-test  Run CubeAPI unit tests in Docker\n"
 	@printf "  cube-api-test Alias of cubeapi-test\n"
 	@printf "  shim-test     Run CubeShim unit tests in Docker\n"
-	@printf "  agent-test    Run cube-agent unit tests in Docker\n"
 	@printf "  network-agent-test Run network-agent unit tests in Docker\n"
 	@printf "  guest-kernel  Build guest kernel vmlinux/Image (KERNEL_SRC=...; native or cross x86_64<->aarch64)\n"
 	@printf "  all           Build cubemaster, cubelet, network-agent and cubevsmapdump in Docker\n"
@@ -263,10 +262,6 @@ cubelet-test: builder-image
 .PHONY: network-agent-test
 network-agent-test: builder-image
 	$(MAKE) builder-run BUILDER_CMD='cd /workspace/network-agent && go mod download && make test'
-
-.PHONY: agent-test
-agent-test: builder-image
-	$(MAKE) builder-run BUILDER_CMD='cd /workspace/agent && make test'
 
 .PHONY: cubeapi-test
 cubeapi-test: builder-image

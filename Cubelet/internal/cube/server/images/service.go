@@ -226,9 +226,8 @@ func (c *CubeImageService) LocalResolve(ctx context.Context, refOrID string) (im
 				return ""
 			}
 
-			if named, ok := normalized.(reference.Digested); ok {
-				ref = named.Digest().String()
-			} else {
+			ref = normalized.String()
+			if reference.IsNameOnly(normalized) {
 				ref = reference.TagNameOnly(normalized).String()
 			}
 			id, err := c.imageStore.Resolve(ctx, ref)

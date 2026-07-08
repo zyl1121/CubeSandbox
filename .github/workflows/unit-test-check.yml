@@ -9,7 +9,6 @@ on:
       - 'Cubelet/**'
       - 'CubeShim/**'
       - 'CubeNet/**'
-      - 'agent/**'
       - 'cubecow/**'
       - 'network-agent/**'
       - 'docker/Dockerfile.builder'
@@ -23,7 +22,6 @@ on:
       - 'Cubelet/**'
       - 'CubeShim/**'
       - 'CubeNet/**'
-      - 'agent/**'
       - 'cubecow/**'
       - 'network-agent/**'
       - 'docker/Dockerfile.builder'
@@ -43,7 +41,6 @@ on:
           - cubemaster
           - cubelet
           - cubeshim
-          - agent
           - network-agent
 
 concurrency:
@@ -93,7 +90,6 @@ jobs:
             add_component "CubeMaster"
             add_component "Cubelet"
             add_component "CubeShim"
-            add_component "agent"
             add_component "network-agent"
           }
 
@@ -105,7 +101,6 @@ jobs:
               cubemaster) add_component "CubeMaster" ;;
               cubelet) add_component "Cubelet" ;;
               cubeshim) add_component "CubeShim" ;;
-              agent) add_component "agent" ;;
               network-agent) add_component "network-agent" ;;
               *)
                 echo "::error::unsupported component input: ${selected_component}"
@@ -147,9 +142,6 @@ jobs:
                 CubeShim/*)
                   add_component "CubeShim"
                   ;;
-                agent/*)
-                  add_component "agent"
-                  ;;
                 network-agent/*|CubeNet/*)
                   add_component "network-agent"
                   ;;
@@ -173,7 +165,6 @@ jobs:
                     elif . == "CubeMaster" then "CubeMaster"
                     elif . == "Cubelet" then "Cubelet"
                     elif . == "CubeShim" then "CubeShim"
-                    elif . == "agent" then "Agent"
                     elif . == "network-agent" then "Network Agent"
                     else error("unsupported component: " + .)
                     end
@@ -183,7 +174,6 @@ jobs:
                     elif . == "CubeMaster" then "cubemaster-test"
                     elif . == "Cubelet" then "cubelet-test"
                     elif . == "CubeShim" then "shim-test"
-                    elif . == "agent" then "agent-test"
                     elif . == "network-agent" then "network-agent-test"
                     else error("unsupported component: " + .)
                     end
