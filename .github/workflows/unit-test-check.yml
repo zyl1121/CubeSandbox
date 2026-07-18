@@ -230,6 +230,13 @@ jobs:
             esac
           done <<< "${changed_files}"
 
+          # Fork-only stacked component PRs use this branch as their base.
+          # Build its image locally even though the component diff itself does
+          # not repeat the Dockerfile change.
+          if [[ "${GITHUB_EVENT_NAME}" == "pull_request" && "${GITHUB_BASE_REF}" == "ci/builder-go-1.25.7" ]]; then
+            builder_inputs_changed="true"
+          fi
+
           echo "changed=${builder_inputs_changed}" >> "${GITHUB_OUTPUT}"
 
       - name: Log in to GitHub Container Registry
