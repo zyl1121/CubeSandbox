@@ -74,6 +74,41 @@ func TestTelnet(t *testing.T) {
 	assert.False(t, bTimeout)
 }
 
+func TestTelnetPingDispatch(t *testing.T) {
+	originalPingProbe := pingProbe
+	t.Cleanup(func() { pingProbe = originalPingProbe })
+
+	calls := 0
+	var gotAddress string
+	var gotTimeout time.Duration
+	var gotUDP bool
+	pingProbe = func(_ context.Context, address string, timeout time.Duration, udp bool) error {
+		calls++
+		gotAddress = address
+		gotTimeout = timeout
+		gotUDP = udp
+		return nil
+	}
+
+	cfg := &ProbeConfig{
+		Addr:             "127.0.0.1",
+		Timeout:          50 * time.Millisecond,
+		Period:           10 * time.Millisecond,
+		SuccessThreshold: 1,
+		FailureThreshold: 1,
+		ProbeTimeout:     20 * time.Millisecond,
+		Action:           ActionPing,
+		PingUDP:          true,
+	}
+
+	ret := <-Telnet(context.Background(), cfg)
+	assert.NoError(t, ret)
+	assert.Equal(t, 1, calls)
+	assert.Equal(t, cfg.Addr, gotAddress)
+	assert.Equal(t, cfg.Period, gotTimeout)
+	assert.True(t, gotUDP)
+}
+
 func TestTelnetCtxTimeout(t *testing.T) {
 	initT := 0
 	timeout := 50

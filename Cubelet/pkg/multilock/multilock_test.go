@@ -8,10 +8,12 @@ import (
 	"fmt"
 	"math/rand"
 	"runtime"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/stretchr/testify/require"
 )
 
 func TestMultiLock_Get(t *testing.T) {
@@ -39,22 +41,25 @@ func TestMultiLock_Get(t *testing.T) {
 func TestMultiLock_Lifetime(t *testing.T) {
 	o := NewMultiLockOptions()
 	o.CheckInterval = 100 * time.Millisecond
-	o.ExpiredInSecond = 3
+	o.ExpiredInSecond = 1
 	mlock := NewMultiLock(o)
 	key := "test_key"
 	l := mlock.Get(key)
+	var wg sync.WaitGroup
+	wg.Add(50)
 	for i := 0; i < 50; i++ {
 		go func() {
+			defer wg.Done()
 			l.LockAt()
 			defer l.UnlockAt()
 			_ = uuid.New().String()
 		}()
 	}
-	time.Sleep(4 * time.Second)
-	_, ok := mlock.Load(key)
-	if ok {
-		t.Errorf("Lock at key '%s' still life", key)
-	}
+	wg.Wait()
+	require.Eventually(t, func() bool {
+		_, ok := mlock.Load(key)
+		return !ok
+	}, 3*time.Second, 50*time.Millisecond, "Lock at key %q is still alive", key)
 	l.LockAt()
 	l.UnlockAt()
 }

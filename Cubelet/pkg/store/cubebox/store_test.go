@@ -238,9 +238,9 @@ func TestStoreDeleteContainer(t *testing.T) {
 
 	store.DeleteContainer(containerID)
 
-	_, err = store.GetContainer(containerID)
-	assert.Error(t, err)
-	assert.Equal(t, utils.ErrorKeyNotFound, err)
+	gotContainer, err := store.GetContainer(containerID)
+	require.NoError(t, err)
+	assert.NotNil(t, gotContainer.DeletedTime)
 
 	got, err := store.Get("box1")
 	require.NoError(t, err)
@@ -645,8 +645,9 @@ func TestStoreDeleteContainerUpdate(t *testing.T) {
 
 	store.DeleteContainer(container1ID)
 
-	_, err = store.GetContainer(container1ID)
-	assert.Error(t, err)
+	deleted, err := store.GetContainer(container1ID)
+	require.NoError(t, err)
+	assert.NotNil(t, deleted.DeletedTime)
 
 	got, err := store.GetContainer(container2ID)
 	require.NoError(t, err)
@@ -738,8 +739,9 @@ func TestStoreFullWorkflow(t *testing.T) {
 	assert.Equal(t, 1, len(boxes))
 
 	store.DeleteContainer(containerID)
-	_, err = store.GetContainer(containerID)
-	assert.Error(t, err)
+	deleted, err := store.GetContainer(containerID)
+	require.NoError(t, err)
+	assert.NotNil(t, deleted.DeletedTime)
 
 	err = store.DeleteSync("box1")
 	require.NoError(t, err)
@@ -887,15 +889,19 @@ func TestStoreContainerDeletionAndReAdd(t *testing.T) {
 
 	store.DeleteContainer(containerID)
 
-	_, err = store.GetContainer(containerID)
-	assert.Error(t, err)
+	deleted, err := store.GetContainer(containerID)
+	require.NoError(t, err)
+	assert.NotNil(t, deleted.DeletedTime)
 
-	box.AddContainer(container)
+	replacement := *container
+	replacement.DeletedTime = nil
+	box.AddContainer(&replacement)
 	store.Add(box)
 
 	got, err := store.GetContainer(containerID)
 	require.NoError(t, err)
 	assert.Equal(t, containerID, got.ID)
+	assert.Nil(t, got.DeletedTime)
 }
 
 func TestStoreListConcurrency(t *testing.T) {

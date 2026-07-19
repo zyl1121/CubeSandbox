@@ -27,6 +27,7 @@ import (
 	"github.com/tencentcloud/CubeSandbox/Cubelet/pkg/constants"
 	"github.com/tencentcloud/CubeSandbox/Cubelet/pkg/ret"
 	cubeboxstore "github.com/tencentcloud/CubeSandbox/Cubelet/pkg/store/cubebox"
+	"github.com/tencentcloud/CubeSandbox/Cubelet/pkg/telnet"
 	"github.com/tencentcloud/CubeSandbox/Cubelet/plugins/workflow"
 	"k8s.io/utils/pointer"
 )
@@ -35,6 +36,12 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
 	return f(r)
+}
+
+func completedProbe(err error) chan error {
+	result := make(chan error, 1)
+	result <- err
+	return result
 }
 
 func TestProbeErrIp(t *testing.T) {
@@ -795,7 +802,11 @@ func TestProbeTimeoutMsWithPing(t *testing.T) {
 			defer cancel()
 			ctx = context.WithValue(ctx, workflow.KCreateContext, createInfo)
 
-			l := &local{}
+			var gotCfg telnet.ProbeConfig
+			l := &local{probeFn: func(_ context.Context, cfg *telnet.ProbeConfig) chan error {
+				gotCfg = *cfg
+				return completedProbe(nil)
+			}}
 			retErr := l.doProbe(ctx, cnt, ci)
 			e, _ := ret.FromError(retErr)
 			assert.Equal(t, errorcode.ErrorCode_Success, e.Code())
@@ -805,6 +816,9 @@ func TestProbeTimeoutMsWithPing(t *testing.T) {
 			} else {
 				assert.Equal(t, tt.probeTimeoutMs, cnt.Probe.ProbeTimeoutMs, "ProbeTimeoutMs应该保持原值")
 			}
+			assert.Equal(t, telnet.ActionPing, gotCfg.Action)
+			assert.Equal(t, time.Duration(cnt.Probe.ProbeTimeoutMs)*time.Millisecond, gotCfg.ProbeTimeout)
+			assert.Equal(t, tt.udp, gotCfg.PingUDP)
 
 			metrics := createInfo.GetMetric()
 			require.LessOrEqual(t, 1, len(metrics), "at least one metric")
@@ -1017,29 +1031,29 @@ func TestProbeConcurrent(t *testing.T) {
 }
 
 func TestProbeConcurrentMixed(t *testing.T) {
-
-	httpPort := 9100
-	mux := http.NewServeMux()
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+	httpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/health", r.URL.Path)
 		w.WriteHeader(http.StatusOK)
-	})
-	httpSrv := &http.Server{Addr: fmt.Sprintf("localhost:%d", httpPort), Handler: mux}
-	go func() {
-		httpSrv.ListenAndServe()
-	}()
+	}))
 	defer httpSrv.Close()
+	httpURL, err := neturl.Parse(httpSrv.URL)
+	require.NoError(t, err)
+	_, httpPortText, err := net.SplitHostPort(httpURL.Host)
+	require.NoError(t, err)
+	httpPort, err := strconv.Atoi(httpPortText)
+	require.NoError(t, err)
 
-	tcpPort := 9101
-	tcpListener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", tcpPort))
-	if err != nil {
-		assert.FailNow(t, err.Error())
-	}
+	tcpListener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
 	defer tcpListener.Close()
-
-	time.Sleep(200 * time.Millisecond)
+	_, tcpPortText, err := net.SplitHostPort(tcpListener.Addr().String())
+	require.NoError(t, err)
+	tcpPort, err := strconv.Atoi(tcpPortText)
+	require.NoError(t, err)
 
 	concurrentCount := 15
 	errCh := make(chan error, concurrentCount)
+	cfgCh := make(chan telnet.ProbeConfig, concurrentCount)
 
 	for i := 0; i < concurrentCount; i++ {
 		go func(index int) {
@@ -1119,27 +1133,53 @@ func TestProbeConcurrentMixed(t *testing.T) {
 			defer cancel()
 			ctx = context.WithValue(ctx, workflow.KCreateContext, createInfo)
 
-			l := &local{}
+			l := &local{probeFn: func(_ context.Context, cfg *telnet.ProbeConfig) chan error {
+				cfgCh <- *cfg
+				if cfg.Action == telnet.ActionPing {
+					return completedProbe(nil)
+				}
+				return telnet.Telnet(ctx, cfg)
+			}}
 			retErr := l.doProbe(ctx, cnt, ci)
 			errCh <- retErr
 		}(i)
 	}
 
-	successCount := 0
-	failCount := 0
 	for i := 0; i < concurrentCount; i++ {
 		retErr := <-errCh
-		if retErr == nil {
-			successCount++
-		} else {
-			failCount++
-			e, _ := ret.FromError(retErr)
-			t.Logf("mixed probe %d failed: %v", i, e.Message())
-		}
+		require.NoError(t, retErr)
 	}
 
-	successRate := float64(successCount) / float64(concurrentCount)
-	assert.GreaterOrEqual(t, successRate, 0.8, "混合并发探测成功率应该大于等于80%%")
-	t.Logf("混合并发探测测试完成: 总数=%d, 成功=%d, 失败=%d, 成功率=%.2f%%",
-		concurrentCount, successCount, failCount, successRate*100)
+	actionCounts := map[int]int{}
+	for i := 0; i < concurrentCount; i++ {
+		cfg := <-cfgCh
+		actionCounts[cfg.Action]++
+		assert.Equal(t, "127.0.0.1", cfg.Addr)
+		assert.Zero(t, cfg.InitialDelay)
+		assert.Equal(t, 200*time.Millisecond, cfg.Timeout)
+		assert.Equal(t, 10*time.Millisecond, cfg.Period)
+		assert.Equal(t, int32(1), cfg.SuccessThreshold)
+		assert.Equal(t, int32(1), cfg.FailureThreshold)
+		assert.Equal(t, 50*time.Millisecond, cfg.ProbeTimeout)
+
+		switch cfg.Action {
+		case telnet.ActionHTTPGet:
+			assert.Equal(t, int32(httpPort), cfg.Port)
+			require.NotNil(t, cfg.HttpGetRequest)
+			assert.Equal(t, http.MethodGet, cfg.HttpGetRequest.Method)
+			assert.Equal(t, "/health", cfg.HttpGetRequest.URL.Path)
+		case telnet.ActionTCPSocket:
+			assert.Equal(t, int32(tcpPort), cfg.Port)
+			assert.Nil(t, cfg.HttpGetRequest)
+		case telnet.ActionPing:
+			assert.Zero(t, cfg.Port)
+			assert.False(t, cfg.PingUDP)
+			assert.Nil(t, cfg.HttpGetRequest)
+		default:
+			t.Fatalf("unexpected probe action: %d", cfg.Action)
+		}
+	}
+	assert.Equal(t, 5, actionCounts[telnet.ActionHTTPGet])
+	assert.Equal(t, 5, actionCounts[telnet.ActionTCPSocket])
+	assert.Equal(t, 5, actionCounts[telnet.ActionPing])
 }

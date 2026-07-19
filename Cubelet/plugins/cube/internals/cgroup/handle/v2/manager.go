@@ -217,6 +217,10 @@ func (h *handler) Update(ctx context.Context, group string, cpu, mem resource.Qu
 }
 
 func (h *handler) Delete(ctx context.Context, group string) error {
+	if !h.IsExist(ctx, group) {
+		return nil
+	}
+
 	m, err := cgroup2.Load(group, cgroup2.WithMountpoint(h.root))
 	if err != nil {
 		return err
@@ -229,7 +233,7 @@ func (h *handler) Delete(ctx context.Context, group string) error {
 			delay *= 2
 		}
 
-		if err = m.Delete(); err == nil {
+		if err = m.Delete(); err == nil || os.IsNotExist(err) {
 			return nil
 		}
 

@@ -62,9 +62,12 @@ func TestLocalResolve(t *testing.T) {
 		"docker.io/library/busybox:latest",
 		"docker.io/library/busybox@sha256:e6693c20186f837fc393390135d8a598a96a833917917789d63766cab6c59582",
 	} {
-		img, err := c.LocalResolve(ctx, ref)
-		assert.NoError(t, err)
-		assert.Equal(t, image, img)
+		ref := ref
+		t.Run(ref, func(t *testing.T) {
+			img, err := c.LocalResolve(ctx, ref)
+			assert.NoError(t, err)
+			assert.Equal(t, image, img)
+		})
 	}
 	img, err := c.LocalResolve(ctx, "randomid")
 	assert.Equal(t, errdefs.IsNotFound(err), true)

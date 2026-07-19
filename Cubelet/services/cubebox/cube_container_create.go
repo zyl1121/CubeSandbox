@@ -1146,8 +1146,10 @@ func (l *local) prepareWritableRootfs(ctx context.Context, flowOpts *workflow.Cr
 	return oci.WithAnnotations(annotations), nil
 }
 
+var addCgroupProc = cgroupp.AddProc
+
 func setCgroup(ctx context.Context, pid uint32, group string) {
-	err := cgroupp.AddProc(group, uint64(pid))
+	err := addCgroupProc(group, uint64(pid))
 	if err != nil {
 		log.G(ctx).Errorf("add shim pid %d to cgroup %s failed: %v", pid, group, err)
 	}

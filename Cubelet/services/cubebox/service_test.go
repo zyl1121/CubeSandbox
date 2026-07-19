@@ -17,6 +17,7 @@ import (
 	cubeboxv1 "github.com/tencentcloud/CubeSandbox/Cubelet/api/services/cubebox/v1"
 	"github.com/tencentcloud/CubeSandbox/Cubelet/api/services/errorcode/v1"
 	"github.com/tencentcloud/CubeSandbox/Cubelet/pkg/constants"
+	"github.com/tencentcloud/CubeSandbox/Cubelet/pkg/numa"
 	cubeboxstore "github.com/tencentcloud/CubeSandbox/Cubelet/pkg/store/cubebox"
 )
 
@@ -126,21 +127,15 @@ func TestDeadlineCtxZeroDelay(t *testing.T) {
 }
 
 func TestGetNextNumaNode(t *testing.T) {
-
 	s := &service{
 		numaNodeIndex: 0,
 	}
 
-	assert.Equal(t, int32(1), s.getNextNumaNode(), "First call should return 1")
-
-	assert.Equal(t, int32(0), s.getNextNumaNode(), "Second call should return 0")
-	assert.Equal(t, int32(1), s.getNextNumaNode(), "Third call should return 1")
-	assert.Equal(t, int32(0), s.getNextNumaNode(), "Fourth call should return 0")
-
-	for i := 0; i < 10; i++ {
-		s.getNextNumaNode()
+	nodeCount := numa.GetNumaNodeCount()
+	require.Greater(t, nodeCount, 0)
+	for i := 1; i <= nodeCount*3; i++ {
+		assert.Equal(t, int32(i%nodeCount), s.getNextNumaNode())
 	}
-	assert.Equal(t, int32(1), s.getNextNumaNode(), "After multiple calls, it should still cycle between 0 and 1")
 }
 
 func TestCubeboxSorting(t *testing.T) {

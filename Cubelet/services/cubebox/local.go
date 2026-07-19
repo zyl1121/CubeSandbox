@@ -45,6 +45,7 @@ import (
 	"github.com/tencentcloud/CubeSandbox/Cubelet/pkg/log"
 	cubeboxstore "github.com/tencentcloud/CubeSandbox/Cubelet/pkg/store/cubebox"
 	"github.com/tencentcloud/CubeSandbox/Cubelet/pkg/taskio"
+	"github.com/tencentcloud/CubeSandbox/Cubelet/pkg/telnet"
 	"github.com/tencentcloud/CubeSandbox/Cubelet/pkg/utils"
 	"github.com/tencentcloud/CubeSandbox/Cubelet/plugins/cube/internals/cubes"
 	"github.com/tencentcloud/CubeSandbox/Cubelet/storage"
@@ -260,6 +261,7 @@ type local struct {
 	criImage       *cubeimages.CubeImageService
 	cbriManager    cbri.APIManager
 	cubeboxManger  cubes.CubeboxAPI
+	probeFn        func(context.Context, *telnet.ProbeConfig) chan error
 	envdHTTPClient *http.Client
 	envdInitPort   int
 	destroyFn      func(context.Context, *workflow.DestroyContext) error

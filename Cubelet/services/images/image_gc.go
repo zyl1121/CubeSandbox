@@ -394,6 +394,9 @@ func (m *imageGCManager) updateImageInUse(ctx context.Context) (map[string]*inus
 		}
 
 		for key, image := range m.imageRecords {
+			if image.ns != ns {
+				continue
+			}
 			if !currentImages.Has(key) {
 				log.G(ctx).Warnf("image %q is no longer present, removing from records", image.ID())
 				delete(m.imageRecords, key)
