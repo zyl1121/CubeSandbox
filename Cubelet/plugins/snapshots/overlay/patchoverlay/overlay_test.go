@@ -8,6 +8,7 @@ package patchoverlay
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -21,17 +22,32 @@ import (
 	"github.com/containerd/containerd/v2/core/snapshots/testsuite"
 	"github.com/containerd/containerd/v2/plugins/snapshots/overlay/overlayutils"
 	"github.com/opencontainers/runtime-spec/specs-go"
+	"golang.org/x/sys/unix"
 )
 
 var rootEnabled = true
 
 func RequiresRoot(t testing.TB) {
+	t.Helper()
 	if !rootEnabled {
 		t.Skip("skipping test that requires root")
 		return
 	}
 	if os.Getuid() != 0 {
-		t.Error("This test must be run as root.")
+		t.Skip("This test must be run as root.")
+	}
+
+	source := t.TempDir()
+	target := t.TempDir()
+	mnts := []mount.Mount{{Type: "bind", Source: source, Options: []string{"bind"}}}
+	if err := mount.All(mnts, target); err != nil {
+		if errors.Is(err, unix.EPERM) || errors.Is(err, unix.EACCES) {
+			t.Skipf("This test requires mount capability: %v", err)
+		}
+		t.Fatalf("failed to probe mount capability: %v", err)
+	}
+	if err := mount.Unmount(target, 0); err != nil {
+		t.Fatalf("failed to clean up mount capability probe: %v", err)
 	}
 }
 

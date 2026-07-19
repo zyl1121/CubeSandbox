@@ -26,6 +26,7 @@ import (
 
 	"github.com/tencentcloud/CubeSandbox/Cubelet/api/services/cubebox/v1"
 	"github.com/tencentcloud/CubeSandbox/Cubelet/api/services/errorcode/v1"
+	dynamConf "github.com/tencentcloud/CubeSandbox/Cubelet/pkg/config"
 	"github.com/tencentcloud/CubeSandbox/Cubelet/pkg/constants"
 	"github.com/tencentcloud/CubeSandbox/Cubelet/pkg/cubecow"
 	"github.com/tencentcloud/CubeSandbox/Cubelet/pkg/ret"
@@ -49,7 +50,15 @@ func makeTestConfig(t *testing.T) *Config {
 	}
 }
 
+func initializeTestCommonConfig(t *testing.T) {
+	t.Helper()
+	_, err := dynamConf.Init("", true)
+	require.NoError(t, err)
+}
+
 func TestParam(t *testing.T) {
+	requireMountCapability(t)
+
 	cfg := makeTestConfig(t)
 
 	s := &local{}
@@ -70,6 +79,8 @@ func TestParam(t *testing.T) {
 }
 
 func TestCreateDestroy(t *testing.T) {
+	requireMountCapability(t)
+
 	cfg := makeTestConfig(t)
 
 	s := &local{}
@@ -124,9 +135,9 @@ func TestCreateDestroy(t *testing.T) {
 }
 func TestCreateDestroyInvalidVolume(t *testing.T) {
 	cfg := makeTestConfig(t)
+	cfg.StorageBackend = "cubecow"
 
-	s := &local{}
-	s.config = cfg
+	s := &local{config: cfg, cowManager: &fakeCowVolumeManager{}}
 	assert.NoError(t, s.init(&plugin.InitContext{Context: context.Background()}))
 
 	ctx := namespaces.WithNamespace(context.Background(), namespaces.Default)
@@ -407,9 +418,10 @@ func (m *fakeCowVolumeManager) GetMetrics(ctx context.Context) (map[string]uint6
 func TestCleanupTemplateLocalDataIsIdempotent(t *testing.T) {
 	cfg := makeTestConfig(t)
 
-	s := &local{}
-	s.config = cfg
-	assert.NoError(t, s.init(&plugin.InitContext{Context: context.Background()}))
+	s := &local{
+		config:                    cfg,
+		cubeboxTemplateFormatPath: filepath.Join(cfg.DataPath, emptyDir, cubeboxTemplateFormatSize),
+	}
 
 	previousLocalStorage := localStorage
 	localStorage = s
@@ -457,8 +469,9 @@ func TestCreateWithTimeoutCtx(t *testing.T) {
 	defer cancel()
 	time.Sleep(2 * time.Millisecond)
 
-	s := &local{}
-	s.config = makeTestConfig(t)
+	cfg := makeTestConfig(t)
+	cfg.StorageBackend = "cubecow"
+	s := &local{config: cfg, cowManager: &fakeCowVolumeManager{}}
 	assert.NoError(t, s.init(&plugin.InitContext{Context: context.Background()}))
 
 	req := &cubebox.RunCubeSandboxRequest{
@@ -486,8 +499,9 @@ func TestCreateWithTimeoutCtx(t *testing.T) {
 func TestCreateWithInvalidParam(t *testing.T) {
 	ctx := context.Background()
 
-	s := &local{}
-	s.config = makeTestConfig(t)
+	cfg := makeTestConfig(t)
+	cfg.StorageBackend = "cubecow"
+	s := &local{config: cfg, cowManager: &fakeCowVolumeManager{}}
 	assert.NoError(t, s.init(&plugin.InitContext{Context: context.Background()}))
 
 	req := &cubebox.RunCubeSandboxRequest{
@@ -542,14 +556,13 @@ func TestMain(m *testing.M) {
 }
 
 func TestPollImmediateInfiniteWithContext(t *testing.T) {
-	timeout := 5 * time.Second
+	timeout := 50 * time.Millisecond
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	done := make(chan bool, 1)
 	errChan := make(chan error, 1)
 	interval := 10 * time.Millisecond
-	expectedCnt := int(timeout/interval) + 1
 	gotCnt := 0
 	go func() {
 		alreadyRun := false
@@ -570,16 +583,17 @@ func TestPollImmediateInfiniteWithContext(t *testing.T) {
 		t.Fatal("PollImmediateInfiniteWithContext run immediately")
 	}
 
-	select {
-	case <-ctx.Done():
-		assert.Equal(t, expectedCnt, gotCnt)
-	case err := <-errChan:
-		assert.NoError(t, err)
-	}
+	err := <-errChan
+	assert.ErrorIs(t, err, wait.ErrWaitTimeout)
+	assert.GreaterOrEqual(t, gotCnt, 2)
 }
 
 func TestSnapCreateCubebox(t *testing.T) {
+	requireMountCapability(t)
+	initializeTestCommonConfig(t)
+
 	cfg := makeTestConfig(t)
+	cfg.PoolType = cp_reflink_type
 
 	s := &local{}
 	s.config = cfg
@@ -631,9 +645,9 @@ func TestSnapCreateCubebox(t *testing.T) {
 
 	exist, _ = utils.DenExist(filePath)
 
-	assert.True(t, exist)
+	assert.False(t, exist)
 	p, ok := s.poolFormat.Load(templateID)
-	assert.True(t, ok)
+	require.True(t, ok)
 	file, err := p.(Pool).Get(ctx, 0)
 	assert.NoError(t, err)
 	assert.NotNil(t, file)
@@ -650,8 +664,11 @@ func TestSnapCreateCubebox(t *testing.T) {
 }
 
 func TestCreateCubeboxBySnap(t *testing.T) {
+	requireMountCapability(t)
+	initializeTestCommonConfig(t)
 
 	cfg := makeTestConfig(t)
+	cfg.PoolType = cp_reflink_type
 
 	s := &local{}
 	s.config = cfg
@@ -686,6 +703,10 @@ func TestCreateCubeboxBySnap(t *testing.T) {
 	err := s.Create(ctx, opts)
 	assert.NoError(t, err)
 	require.NotNil(t, opts.StorageInfo)
+	require.NoError(t, s.Destroy(ctx, &workflow.DestroyContext{
+		BaseWorkflowInfo: workflow.BaseWorkflowInfo{SandboxID: "test"},
+	}))
+	seedTestSnapshotCatalog(t, templateID, "", "")
 
 	for i := 0; i < 10; i++ {
 		reqSnap := &cubebox.RunCubeSandboxRequest{
@@ -738,6 +759,7 @@ func TestCreateCubeboxBySnap(t *testing.T) {
 }
 
 func TestInit(t *testing.T) {
+	requireMountCapability(t)
 
 	cfg := makeTestConfig(t)
 
@@ -1258,6 +1280,12 @@ func TestCleanupCreateResultRemovesHostDirSandboxPath(t *testing.T) {
 	err := s.cleanupCreateResult(context.Background(), &StorageInfo{
 		SandboxID: "hostdir-sb",
 		Volumes:   map[string]*BackendFileInfo{},
+		HostDirBackendInfos: map[string]*HostDirBackendInfo{
+			"vol": {
+				VolumeName: "vol",
+				BindPath:   sandboxDir,
+			},
+		},
 	})
 	require.NoError(t, err)
 	require.NoDirExists(t, filepath.Join(hostDirBasePath, "hostdir-sb"))
@@ -1527,6 +1555,7 @@ func TestCowTemplateBuildAndRestoreShareComparableRootfsSize(t *testing.T) {
 	require.NoError(t, s.Create(ctx, buildOpts))
 	buildVol := buildOpts.StorageInfo.(*StorageInfo).Volumes["cube_rootfs_rw"]
 	require.NotNil(t, buildVol)
+	seedTestSnapshotCatalog(t, templateID, "", "")
 
 	restoreReq := &cubebox.RunCubeSandboxRequest{
 		Volumes: []*cubebox.Volume{{

@@ -208,10 +208,25 @@ func TestDefaultRunHostDirCommandTimeoutKillsProcessGroup(t *testing.T) {
 			}
 			t.Fatalf("probe child pid %d: %v", pid, killErr)
 		}
+		if zombie, err := processIsZombie(pid); err == nil && zombie {
+			return
+		}
 
 		if time.Now().After(deadline) {
 			t.Fatalf("child process %d still alive after timeout", pid)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+}
+
+func processIsZombie(pid int) (bool, error) {
+	stat, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		return false, err
+	}
+	commandEnd := strings.LastIndexByte(string(stat), ')')
+	if commandEnd < 0 || commandEnd+2 >= len(stat) {
+		return false, fmt.Errorf("unexpected process stat for pid %d", pid)
+	}
+	return stat[commandEnd+2] == 'Z', nil
 }

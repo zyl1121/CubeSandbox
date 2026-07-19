@@ -125,6 +125,13 @@ func TestGetCubeUpperAndWorkPath(t *testing.T) {
 	infoRef := snapshots.Info{Labels: map[string]string{
 		constants.AnnotationSnapshotRef: constants.PrefixSha256 + "abc",
 	}}
+	refPath := filepath.Join(root, refDirName, "ns", "abc")
+	if err := os.MkdirAll(filepath.Join(refPath, "fs"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(refPath, "work"), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	if got := enabled.getValidCubeUpperPath(context.Background(), id, infoRef); got != enabled.upperPath(id) {
 		t.Fatalf("expected fallback upper path on error")
 	}
@@ -207,7 +214,7 @@ func TestGetCleanupRefDirectories(t *testing.T) {
 
 	ctx := context.Background()
 	if err := o.ms.WithTransaction(ctx, true, func(tx context.Context) error {
-		_, err := storage.CreateSnapshot(tx, snapshots.KindActive, "key-keep", "", snapshots.WithLabels(map[string]string{
+		_, err := storage.CreateSnapshot(tx, snapshots.KindActive, "nsA/meta/key-keep", "", snapshots.WithLabels(map[string]string{
 			constants.AnnotationSnapshotRef: constants.PrefixSha256 + "nsB",
 		}))
 		return err
@@ -239,8 +246,41 @@ func TestGetCleanupRefDirectories(t *testing.T) {
 	}
 }
 
+func TestGetCleanupRefDirectoriesRejectsUnparseableSnapshot(t *testing.T) {
+	root := t.TempDir()
+	snap, err := NewSnapshotter(root, WithCubeUseRefPath)
+	if err != nil {
+		t.Fatalf("create snapshotter: %v", err)
+	}
+	o := snap.(*snapshotter)
+
+	ctx := context.Background()
+	if err := o.ms.WithTransaction(ctx, true, func(tx context.Context) error {
+		_, err := storage.CreateSnapshot(tx, snapshots.KindActive, "key-keep", "", snapshots.WithLabels(map[string]string{
+			constants.AnnotationSnapshotRef: constants.PrefixSha256 + "keep",
+		}))
+		return err
+	}); err != nil {
+		t.Fatalf("create snapshot: %v", err)
+	}
+
+	refPath := filepath.Join(root, refDirName, "nsA", "keep")
+	if err := os.MkdirAll(refPath, 0o700); err != nil {
+		t.Fatalf("create ref dir: %v", err)
+	}
+
+	if err := o.ms.WithTransaction(ctx, false, func(tx context.Context) error {
+		cleanup, err := o.getCleanupRefDirectories(tx)
+		if len(cleanup) != 0 {
+			t.Fatalf("cleanup must stop before classifying ref directories: %v", cleanup)
+		}
+		return err
+	}); err == nil {
+		t.Fatal("expected unparseable snapshot to make cleanup fail safely")
+	}
+}
+
 func TestRemoveDirectory(t *testing.T) {
-	RequiresRoot(t)
 	ctx := context.Background()
 
 	t.Run("non mount path", func(t *testing.T) {
@@ -255,6 +295,7 @@ func TestRemoveDirectory(t *testing.T) {
 	})
 
 	t.Run("mount path", func(t *testing.T) {
+		RequiresRoot(t)
 		source := t.TempDir()
 		target := filepath.Join(t.TempDir(), "mnt")
 		if err := os.MkdirAll(target, 0o700); err != nil {

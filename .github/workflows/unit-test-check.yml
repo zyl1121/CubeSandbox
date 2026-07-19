@@ -5,6 +5,7 @@ on:
     branches: [master]
     paths:
       - 'CubeAPI/**'
+      - 'Cubelet/**'
       - 'CubeShim/**'
       - 'CubeNet/**'
       - 'network-agent/**'
@@ -15,6 +16,7 @@ on:
   pull_request:
     paths:
       - 'CubeAPI/**'
+      - 'Cubelet/**'
       - 'CubeShim/**'
       - 'CubeNet/**'
       - 'network-agent/**'
@@ -32,6 +34,7 @@ on:
         options:
           - all
           - cubeapi
+          - cubelet
           - cubeshim
           - network-agent
 
@@ -79,6 +82,7 @@ jobs:
 
           add_all_components() {
             add_component "CubeAPI"
+            add_component "Cubelet"
             add_component "CubeShim"
             add_component "network-agent"
           }
@@ -88,6 +92,7 @@ jobs:
             case "${selected_component}" in
               all) add_all_components ;;
               cubeapi) add_component "CubeAPI" ;;
+              cubelet) add_component "Cubelet" ;;
               cubeshim) add_component "CubeShim" ;;
               network-agent) add_component "network-agent" ;;
               *)
@@ -121,6 +126,9 @@ jobs:
                 CubeAPI/*)
                   add_component "CubeAPI"
                   ;;
+                Cubelet/*)
+                  add_component "Cubelet"
+                  ;;
                 CubeShim/*)
                   add_component "CubeShim"
                   ;;
@@ -144,6 +152,7 @@ jobs:
                   component: .,
                   display_name: (
                     if . == "CubeAPI" then "CubeAPI"
+                    elif . == "Cubelet" then "Cubelet"
                     elif . == "CubeShim" then "CubeShim"
                     elif . == "network-agent" then "Network Agent"
                     else error("unsupported component: " + .)
@@ -151,6 +160,7 @@ jobs:
                   ),
                   make_target: (
                     if . == "CubeAPI" then "cube-api-test"
+                    elif . == "Cubelet" then "cubelet-test"
                     elif . == "CubeShim" then "shim-test"
                     elif . == "network-agent" then "network-agent-test"
                     else error("unsupported component: " + .)

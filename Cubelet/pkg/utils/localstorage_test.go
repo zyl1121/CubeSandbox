@@ -178,8 +178,8 @@ func TestSetBs_SingleDb(t *testing.T) {
 		[]byte(fmt.Sprintf("%d", 123458))}
 	for i := 0; i < 10; i++ {
 		value := []byte(strconv.FormatInt(int64(i), 10))
-		key := strconv.FormatInt(rand.Int63(), 10)
-		err = db.SetBs(key, value, b1, b2s[rand.Int()%len(b2s)])
+		key := strconv.Itoa(i)
+		err = db.SetBs(key, value, b1, b2s[i%len(b2s)])
 		if err != nil {
 			assert.Nil(t, err)
 			t.FailNow()
@@ -247,8 +247,8 @@ func TestSetBs_Multidb(t *testing.T) {
 		[]byte(fmt.Sprintf("%d", 123458))}
 	for i := 0; i < 10; i++ {
 		value := []byte(strconv.FormatInt(int64(i), 10))
-		key := strconv.FormatInt(rand.Int63(), 10)
-		err = db.SetBs(key, value, b1, b2s[rand.Int()%len(b2s)])
+		key := strconv.Itoa(i)
+		err = db.SetBs(key, value, b1, b2s[i%len(b2s)])
 		if err != nil {
 			assert.Nil(t, err)
 			t.FailNow()
@@ -259,7 +259,7 @@ func TestSetBs_Multidb(t *testing.T) {
 		assert.Nil(t, err)
 		t.FailNow()
 	}
-	assert.LessOrEqual(t, len(allBs), len(b2s))
+	assert.Equal(t, len(b2s), len(allBs))
 	for b, _ := range allBs {
 		all, err := db.ReadAllBs(b1, []byte(b))
 		if err != nil {

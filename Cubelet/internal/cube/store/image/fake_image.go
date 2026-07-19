@@ -25,6 +25,7 @@ import (
 	"fmt"
 
 	"github.com/containerd/platforms"
+	docker "github.com/distribution/reference"
 )
 
 func NewFakeStore(ctx context.Context, images []Image) (*Store, error) {
@@ -36,6 +37,13 @@ func NewFakeStore(ctx context.Context, images []Image) (*Store, error) {
 	for _, i := range images {
 		for _, ref := range i.References {
 			store.refCache[ref] = i.ID
+			if normalized, err := docker.ParseNormalizedNamed(ref); err == nil {
+				store.refCache[normalized.String()] = i.ID
+				store.refCache[docker.TrimNamed(normalized).String()] = i.ID
+				if digested, ok := normalized.(docker.Digested); ok {
+					store.refCache[digested.Digest().String()] = i.ID
+				}
+			}
 		}
 		if err := store.add(i); err != nil {
 			return nil, fmt.Errorf("add image %+v: %w", i, err)

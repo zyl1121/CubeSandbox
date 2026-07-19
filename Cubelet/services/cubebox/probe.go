@@ -79,6 +79,13 @@ func newEnvdHTTPClient() *http.Client {
 	}
 }
 
+func (l *local) runProbe(ctx context.Context, cfg *telnet.ProbeConfig) chan error {
+	if l != nil && l.probeFn != nil {
+		return l.probeFn(ctx, cfg)
+	}
+	return telnet.Telnet(ctx, cfg)
+}
+
 func (l *local) doProbe(ctx context.Context, c *cubebox.ContainerConfig, ci *cubeboxstore.Container) (retErr error) {
 	startTime := time.Now()
 	defer func() {
@@ -141,7 +148,7 @@ func (l *local) doProbe(ctx context.Context, c *cubebox.ContainerConfig, ci *cub
 		}
 
 		log.G(ctx).Debugf("probe [%s] start:%s", ci.IP, utils.InterfaceToString(cfg))
-		telnetCh = telnet.Telnet(ctx, cfg)
+		telnetCh = l.runProbe(ctx, cfg)
 	} else {
 		telnetCh <- nil
 	}

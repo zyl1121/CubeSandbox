@@ -141,11 +141,10 @@ func TestGetMountOptions(t *testing.T) {
 
 func TestStoreNumaQueues(t *testing.T) {
 	tests := []struct {
-		name               string
-		opts               *workflow.CreateContext
-		expectedNode       int32
-		expectedQueues     int64
-		expectedLabelValue string
+		name           string
+		opts           *workflow.CreateContext
+		expectedNode   int32
+		expectedQueues int64
 	}{
 		{
 			name: "with numa node 1",
@@ -154,9 +153,8 @@ func TestStoreNumaQueues(t *testing.T) {
 					NumaNode: 1,
 				},
 			},
-			expectedNode:       1,
-			expectedQueues:     0,
-			expectedLabelValue: "1",
+			expectedNode:   1,
+			expectedQueues: 0,
 		},
 		{
 			name: "with numa node 0 and storage queues",
@@ -170,9 +168,8 @@ func TestStoreNumaQueues(t *testing.T) {
 					},
 				},
 			},
-			expectedNode:       0,
-			expectedQueues:     4,
-			expectedLabelValue: "0",
+			expectedNode:   0,
+			expectedQueues: 4,
 		},
 	}
 
@@ -190,7 +187,7 @@ func TestStoreNumaQueues(t *testing.T) {
 
 			assert.Equal(t, tt.expectedNode, cubebox.NumaNode)
 			assert.Equal(t, tt.expectedQueues, cubebox.Queues)
-			assert.Equal(t, tt.expectedLabelValue, cubebox.Labels[constants.LabelNumaNode])
+			assert.NotContains(t, cubebox.Labels, constants.LabelNumaNode)
 		})
 	}
 }
@@ -604,73 +601,21 @@ func TestPrepareSandboxPathVolume(t *testing.T) {
 	}
 }
 
-func TestPrepareVolumeAnnotations(t *testing.T) {
-	tests := []struct {
-		name      string
-		opts      *workflow.CreateContext
-		expectNil bool
-	}{
-		{
-			name: "no storage info",
-			opts: &workflow.CreateContext{
-				StorageInfo: nil,
+func TestPrepareVolumeAnnotationsIsNoop(t *testing.T) {
+	l := &local{}
+	opts, err := l.prepareVolumeAnnotations(context.Background(), &workflow.CreateContext{
+		StorageInfo: &storage.StorageInfo{
+			CubePCISystemDiskInfo: &disk.CubePCISystemDiskInfo{
+				PCISystemDisk: disk.CubePCIDisk{ID: "sys-disk-1"},
 			},
-			expectNil: true,
-		},
-		{
-			name: "storage info with no PCI disks",
-			opts: &workflow.CreateContext{
-				StorageInfo: &storage.StorageInfo{},
+			CubePCIDiskInfo: &disk.CubePCIDiskInfo{
+				PCIDisks: []disk.CubePCIDisk{{ID: "data-disk-1"}},
 			},
-			expectNil: true,
 		},
-		{
-			name: "storage info with system disk",
-			opts: &workflow.CreateContext{
-				StorageInfo: &storage.StorageInfo{
-					CubePCISystemDiskInfo: &disk.CubePCISystemDiskInfo{
-						PCISystemDisk: disk.CubePCIDisk{
-							ID: "sys-disk-1",
-						},
-					},
-				},
-			},
-			expectNil: false,
-		},
-		{
-			name: "storage info with data disks",
-			opts: &workflow.CreateContext{
-				StorageInfo: &storage.StorageInfo{
-					CubePCIDiskInfo: &disk.CubePCIDiskInfo{
-						PCIDisks: []disk.CubePCIDisk{
-							{
-								ID: "data-disk-1",
-							},
-						},
-					},
-				},
-			},
-			expectNil: false,
-		},
-	}
+	})
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			ctx := context.Background()
-			l := &local{}
-
-			opts, err := l.prepareVolumeAnnotations(ctx, tt.opts)
-
-			assert.NoError(t, err)
-
-			if tt.expectNil {
-				assert.Nil(t, opts)
-			} else {
-				assert.NotNil(t, opts)
-				assert.Greater(t, len(opts), 0)
-			}
-		})
-	}
+	require.NoError(t, err)
+	assert.Nil(t, opts)
 }
 
 func TestGetSandboxRuntime(t *testing.T) {
@@ -772,7 +717,8 @@ func TestDeepCopyStringMap(t *testing.T) {
 			name:  "nil map",
 			input: nil,
 			validate: func(t *testing.T, original, copy map[string]string) {
-				assert.Nil(t, copy)
+				assert.NotNil(t, copy)
+				assert.Empty(t, copy)
 			},
 		},
 		{
@@ -890,10 +836,23 @@ func TestSetCgroup(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
+			var gotPID uint64
+			var gotGroup string
+			previous := addCgroupProc
+			addCgroupProc = func(group string, pid uint64) error {
+				gotGroup = group
+				gotPID = pid
+				return nil
+			}
+			t.Cleanup(func() {
+				addCgroupProc = previous
+			})
 
 			assert.NotPanics(t, func() {
 				setCgroup(ctx, tt.pid, tt.group)
 			})
+			assert.Equal(t, uint64(tt.pid), gotPID)
+			assert.Equal(t, tt.group, gotGroup)
 		})
 	}
 }

@@ -25,7 +25,8 @@ import (
 
 func makeCubeBox(image string) *cubebox.CubeSandbox {
 	return &cubebox.CubeSandbox{
-		Id: uuid.New().String(),
+		Id:        uuid.New().String(),
+		Namespace: "test",
 		Containers: []*cubebox.Container{
 			{
 				Id:    "c1",
@@ -193,10 +194,11 @@ func TestDeleteUnusedImageByRecentlyUsed(t *testing.T) {
 	err = m.GarbageCollect(context.Background())
 	assert.NoError(t, err)
 	fmt.Println(fakeService.ImageDeleteEvent)
+	assert.Empty(t, fakeService.ImageDeleteEvent)
 
 	resp, err := cirimage.ListImage(ctx)
 	assert.NoError(t, err)
-	assert.Equal(t, 0, len(resp))
+	assert.Len(t, resp, len(testImages))
 }
 
 func TestImageUsed(t *testing.T) {

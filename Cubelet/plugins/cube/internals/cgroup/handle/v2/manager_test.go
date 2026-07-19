@@ -15,14 +15,24 @@ import (
 
 	"github.com/containerd/cgroups/v3"
 	"github.com/stretchr/testify/assert"
+	"golang.org/x/sys/unix"
 	"k8s.io/apimachinery/pkg/api/resource"
 
 	"github.com/tencentcloud/CubeSandbox/Cubelet/plugins/cube/internals/cgroup/handle"
 )
 
 func checkCgroupMode(t *testing.T) {
+	t.Helper()
 	if cgroups.Mode() == cgroups.Legacy {
 		t.Skipf("System running in cgroupv1 mode")
+	}
+
+	var stat unix.Statfs_t
+	if err := unix.Statfs(handle.RootMountPoint, &stat); err != nil {
+		t.Skipf("Cannot inspect cgroup mount: %v", err)
+	}
+	if stat.Flags&unix.ST_RDONLY != 0 {
+		t.Skip("System cgroupv2 mount is read-only")
 	}
 }
 
@@ -34,6 +44,11 @@ func checkValue(t *testing.T, path string, expected string) {
 	if strings.TrimSpace(string(data)) != expected {
 		t.Fatalf("expected %q, got %q", expected, string(data))
 	}
+}
+
+func TestHandlerDeleteMissingGroupIsIdempotent(t *testing.T) {
+	h := &handler{root: t.TempDir()}
+	assert.NoError(t, h.Delete(context.Background(), "/missing"))
 }
 
 func TestHandler_Base(t *testing.T) {

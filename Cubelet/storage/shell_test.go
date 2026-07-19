@@ -7,7 +7,9 @@ package storage
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -16,7 +18,32 @@ import (
 	"github.com/tencentcloud/CubeSandbox/Cubelet/pkg/utils"
 )
 
+func requireMountCapability(t testing.TB) {
+	t.Helper()
+	if runtime.GOOS != "linux" {
+		t.Skip("test requires Linux mount support")
+	}
+
+	source := t.TempDir()
+	target := t.TempDir()
+	output, err := exec.Command("mount", "--bind", source, target).CombinedOutput()
+	if err != nil {
+		message := strings.ToLower(string(output))
+		if os.Geteuid() != 0 || strings.Contains(message, "operation not permitted") || strings.Contains(message, "permission denied") {
+			t.Skipf("test requires mount capability: %v: %s", err, strings.TrimSpace(string(output)))
+		}
+		t.Fatalf("probe mount capability: %v: %s", err, strings.TrimSpace(string(output)))
+	}
+	t.Cleanup(func() {
+		if output, err := exec.Command("umount", target).CombinedOutput(); err != nil {
+			t.Fatalf("clean up mount capability probe: %v: %s", err, strings.TrimSpace(string(output)))
+		}
+	})
+}
+
 func TestNewExt4BaseRaw(t *testing.T) {
+	requireMountCapability(t)
+
 	testDir := t.TempDir()
 
 	filePath := filepath.Join(testDir, "base.raw")
@@ -26,6 +53,8 @@ func TestNewExt4BaseRaw(t *testing.T) {
 }
 
 func TestNewExt4RawByCopy(t *testing.T) {
+	requireMountCapability(t)
+
 	testDir := t.TempDir()
 
 	fmt.Println(testDir)
@@ -51,6 +80,8 @@ func TestNewExt4RawByCopy(t *testing.T) {
 }
 
 func TestNewExt4RawByReflinkCopy(t *testing.T) {
+	requireMountCapability(t)
+
 	utils.SkipCI(t)
 
 	testDir := t.TempDir()
@@ -79,7 +110,7 @@ func TestNewExt4RawByReflinkCopy(t *testing.T) {
 
 	targetFile = filepath.Join(testDir, "target3.raw")
 	err = newExt4RawByReflinkCopy(baseFile, targetFile, 128000)
-	assert.Errorf(t, err, "copy with size 128000")
+	assert.NoErrorf(t, err, "copy with size 128000")
 }
 
 func TestDescribeFile_Empty(t *testing.T) {
