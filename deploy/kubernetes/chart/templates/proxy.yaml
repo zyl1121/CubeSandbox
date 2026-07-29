@@ -123,8 +123,7 @@ metadata:
     app.kubernetes.io/component: cube-proxy
 spec:
   replicas: {{ .Values.cubeProxy.replicas }}
-  strategy:
-    {{- toYaml .Values.cubeProxy.strategy | nindent 4 }}
+  {{- include "cube.deploymentStrategy" . | nindent 2 }}
   selector:
     matchLabels:
       {{- include "cube.selectorLabels" . | nindent 6 }}

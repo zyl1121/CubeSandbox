@@ -52,6 +52,7 @@ BINARIES := \
 	cubeapi \
 	cubelet \
 	cubemaster \
+	cubeops \
 	cubevsmapdump \
 	network-agent \
 	shim \
@@ -72,19 +73,23 @@ ifneq ($(wildcard $(HOME)/.git-credentials),)
 DOCKER_GIT_CRED += -v $(TMP_GIT_CREDENTIALS):$(BUILDER_CONTAINER_HOME)/.git-credentials
 endif
 
-# Builder image build-args. Set MIRROR=cn to fetch the llvm.sh installer script
-# and the clang-14 apt packages from a China-reachable mirror (override the mirror
-# host with LLVM_MIRROR_BASE=...); unset uses upstream apt.llvm.org. The LLVM GPG
-# signing key is always fetched from apt.llvm.org -- llvm.sh hardcodes that URL and
-# the mirror does not serve the key -- but that is a small request that usually
-# succeeds even when bulk package downloads from apt.llvm.org are slow. This
+# Builder image build-args. Set MIRROR=cn to source packages from China-reachable
+# mirrors: the ubuntu apt archive (amd64 -> $(APT_MIRROR_BASE)/ubuntu, arm64 ->
+# $(APT_MIRROR_BASE)/ubuntu-ports) plus the llvm.sh installer script and clang-14
+# apt packages (override the LLVM mirror host with LLVM_MIRROR_BASE=...). Unset
+# builds against upstream archive.ubuntu.com/ports.ubuntu.com and apt.llvm.org. The
+# LLVM GPG signing key is always fetched from apt.llvm.org -- llvm.sh hardcodes that
+# URL and the mirror does not serve the key -- but that is a small request that
+# usually succeeds even when bulk package downloads from apt.llvm.org are slow. This
 # build-time MIRROR is unrelated to the runtime MIRROR=cn used by deploy/one-click.
+APT_MIRROR_BASE ?= http://mirrors.tencent.com
 LLVM_MIRROR_BASE ?= https://mirrors.zju.edu.cn/llvm-apt
 BUILDER_BUILD_ARGS ?=
 ifeq ($(MIRROR),cn)
-BUILDER_BUILD_ARGS += --build-arg LLVM_MIRROR_BASE=$(LLVM_MIRROR_BASE)
+BUILDER_BUILD_ARGS += --build-arg 'APT_MIRROR_BASE=$(APT_MIRROR_BASE)'
+BUILDER_BUILD_ARGS += --build-arg 'LLVM_MIRROR_BASE=$(LLVM_MIRROR_BASE)'
 else ifneq ($(MIRROR),)
-$(warning MIRROR='$(MIRROR)' is not recognized by builder-image; expected 'cn' or empty -- building against upstream apt.llvm.org)
+$(warning MIRROR='$(MIRROR)' is not recognized by builder-image; expected 'cn' or empty -- building against upstream ubuntu and apt.llvm.org sources)
 endif
 
 .PHONY: all
@@ -107,10 +112,14 @@ help:
 	@printf "  agent         Build cube-agent in Docker\n"
 	@printf "  cubeapi       Build CubeAPI (cube-api) in Docker\n"
 	@printf "  cube-api      Alias of cubeapi\n"
+	@printf "  cubeops       Build CubeOps in Docker\n"
+	@printf "  cubeops-test  Run CubeOps unit tests in Docker\n"
 	@printf "  shim          Build containerd-shim-cube-rs and cube-runtime in Docker\n"
 	@printf "  cubemaster-test Run CubeMaster unit tests in Docker\n"
 	@printf "  cubelet-test  Run Cubelet unit tests in Docker\n"
+	@printf "  cube-proxy-test Run CubeProxy unit tests locally\n"
 	@printf "  cube-api-test Run CubeAPI unit tests in Docker\n"
+	@printf "  cubeops-test  Run CubeOps unit tests in Docker\n"
 	@printf "  shim-test     Run CubeShim unit tests in Docker\n"
 	@printf "  network-agent-test Run network-agent unit tests in Docker\n"
 	@printf "  guest-kernel  Build guest kernel vmlinux/Image (KERNEL_SRC=...; native or cross x86_64<->aarch64)\n"
@@ -134,11 +143,14 @@ help:
 	@printf "  - Run 'make builder-image' first if image %s is missing\n" "$(BUILDER_IMAGE)"
 
 .PHONY: builder-image
+# BUILDER_FORCE_REBUILD rebuilds even when the image is present, and adds
+# --no-cache so a stale image is refreshed from scratch rather than reproduced
+# from the Docker layer cache. A plain first build (image missing) stays cached.
 builder-image:
 	@if [ -z "$(BUILDER_FORCE_REBUILD)" ] && docker image inspect $(BUILDER_IMAGE) >/dev/null 2>&1; then \
 		printf 'Builder image %s already present, skipping build (set BUILDER_FORCE_REBUILD=1 to rebuild)\n' "$(BUILDER_IMAGE)"; \
 	else \
-		docker build $(BUILDER_BUILD_ARGS) -t $(BUILDER_IMAGE) -f $(BUILDER_DOCKERFILE) ./docker; \
+		docker build $(if $(filter-out 0,$(BUILDER_FORCE_REBUILD)),--no-cache) $(BUILDER_BUILD_ARGS) -t $(BUILDER_IMAGE) -f $(BUILDER_DOCKERFILE) ./docker; \
 	fi
 
 .PHONY: prepare-builder-home
@@ -174,7 +186,9 @@ builder-shell: prepare-builder-home prepare-tmp-git-credentials
 
 .PHONY: builder-run
 builder-run: prepare-builder-home prepare-tmp-git-credentials
-	@test -n "$(strip $(BUILDER_CMD))" || { echo "BUILDER_CMD must not be empty"; exit 1; }
+ifeq ($(strip $(BUILDER_CMD)),)
+	$(error BUILDER_CMD must not be empty)
+endif
 	docker run --rm -i \
 		--user "$(UID):$(GID)" \
 		-e HOME=$(BUILDER_CONTAINER_HOME) \
@@ -266,6 +280,15 @@ cubeapi: builder-image
 .PHONY: cube-api
 cube-api: cubeapi
 
+.PHONY: cubeops
+cubeops: builder-image
+	@mkdir -p "$(OUTPUT_DIR)"
+	$(MAKE) builder-run BUILDER_CMD="mkdir -p /workspace/_output/bin && cd /workspace/CubeOps && go mod download && CGO_ENABLED=0 GOOS=linux GOARCH=$$(go env GOARCH) go build -ldflags '-s -w -X main.Version=$(CUBE_VERSION) -X main.Commit=$(CUBE_COMMIT) -X main.BuildTime=$(CUBE_BUILD_TIME)' -o /workspace/_output/bin/cubeops ./cmd/cubeops"
+
+.PHONY: cubeops-test
+cubeops-test: builder-image
+	$(MAKE) builder-run BUILDER_CMD='cd /workspace/CubeOps && go mod download && go test ./...'
+
 .PHONY: cubemaster-test
 cubemaster-test: builder-image
 	$(MAKE) builder-run BUILDER_CMD='cd /workspace/CubeMaster && go mod download && make test'
@@ -277,6 +300,10 @@ cubelet-test: builder-image
 .PHONY: network-agent-test
 network-agent-test: builder-image
 	$(MAKE) builder-run BUILDER_CMD='cd /workspace/network-agent && go mod download && make test'
+
+.PHONY: cube-proxy-test
+cube-proxy-test:
+	$(MAKE) -C CubeProxy test
 
 .PHONY: cube-api-test
 cube-api-test: builder-image
@@ -373,6 +400,8 @@ fmt:
 	@$(MAKE) -C CubeMaster fmt
 	@printf '  %-8s %s\n' "FMT" "CubeNet"
 	@$(MAKE) -C CubeNet fmt
+	@printf '  %-8s %s\n' "FMT" "CubeOps"
+	@$(MAKE) -C CubeOps fmt
 	@printf '  %-8s %s\n' "FMT" "CubeShim"
 	@$(MAKE) -C CubeShim fmt
 	@printf '  %-8s %s\n' "FMT" "cube-lifecycle-manager"

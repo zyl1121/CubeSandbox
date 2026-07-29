@@ -19,6 +19,24 @@
 {{- if hasKey $computeSelector "cube.tencent.com/allow-pvm-bootstrap" }}
 {{- fail "placement.compute.nodeSelector must not include cube.tencent.com/allow-pvm-bootstrap; that label belongs only in placement.pvm.nodeSelector" }}
 {{- end }}
+{{- $gate := .Values.bootstrap.pvmHostKernel.startupGate -}}
+{{- if $gate.enabled }}
+{{- if ne ($gate.effect | default "") "NoSchedule" }}
+{{- fail "bootstrap.pvmHostKernel.startupGate.effect must be NoSchedule" }}
+{{- end }}
+{{- if ne ($gate.manager | default "") "script" }}
+{{- fail "bootstrap.pvmHostKernel.startupGate.manager must be script" }}
+{{- end }}
+{{- if ne ($gate.taintKey | default "") "cube.tencent.com/pvm-not-ready" }}
+{{- fail "bootstrap.pvmHostKernel.startupGate.taintKey is a fixed cluster-wide contract and must be cube.tencent.com/pvm-not-ready" }}
+{{- end }}
+{{- if not $gate.requirePreflight }}
+{{- fail "startupGate.enabled=true requires startupGate.requirePreflight=true; the Helm hook closes the first-install scheduling window" }}
+{{- end }}
+{{- if and (not $gate.priorityClassCreate) (not ($gate.priorityClassName | default "")) }}
+{{- fail "startupGate.priorityClassCreate=false requires startupGate.priorityClassName to reference an existing PriorityClass" }}
+{{- end }}
+{{- end }}
 {{- end }}
 {{- if and (eq (.Values.cubeNode.nodeIDSource | default "specNodeName") "static") (not .Values.cubeNode.staticNodeID) }}
 {{- fail "cubeNode.nodeIDSource=static requires cubeNode.staticNodeID" }}
@@ -36,16 +54,35 @@
 {{- fail "cubeNode.enabled=true with controlPlane.enabled=false requires externalControlPlane.enabled=true" }}
 {{- end }}
 {{- if and .Values.cubeNode.enabled (not .Values.images.waitNodePrep.repository) }}
-{{- fail "cubeNode.enabled=true requires images.waitNodePrep.repository (Big Pod wait-node-prep sidecar)" }}
+{{- fail "cubeNode.enabled=true requires images.waitNodePrep.repository (Big Pod wait-node-prep initContainer)" }}
 {{- end }}
-{{- if and .Values.cubeNode.enabled (not .Values.images.pause.repository) }}
-{{- fail "cubeNode.enabled=true requires images.pause.repository (Big Pod placeholder slots)" }}
+{{- if hasKey (.Values.images | default dict) "pause" }}
+{{- fail "images.pause was removed; Big Pod placeholder slots (cube-slot-*) are gone. Remove images.pause from your values." }}
+{{- end }}
+{{- if hasKey (.Values.cubeNode | default dict) "placeholderSlots" }}
+{{- fail "cubeNode.placeholderSlots was removed; Big Pod no longer reserves cube-slot-1..6. Remove cubeNode.placeholderSlots from your values." }}
 {{- end }}
 {{- if hasKey .Values.security "hostNetwork" }}
 {{- fail "security.hostNetwork was removed; cube-node always runs on the Pod network. Remove security.hostNetwork from your values." }}
 {{- end }}
 {{- if hasKey .Values.cubeNode "useAdvancedDaemonSet" }}
-{{- fail "cubeNode.useAdvancedDaemonSet was removed; cube-node always uses OpenKruise Advanced DaemonSet (hard dependency). Remove cubeNode.useAdvancedDaemonSet from your values and install OpenKruise." }}
+{{- fail "cubeNode.useAdvancedDaemonSet was removed; cube-node uses a native apps/v1 DaemonSet. Remove cubeNode.useAdvancedDaemonSet from your values." }}
+{{- end }}
+{{- $nodeRolling := (((.Values.cubeNode).updateStrategy).rollingUpdate) | default dict -}}
+{{- if hasKey $nodeRolling "rollingUpdateType" }}
+{{- fail "cubeNode.updateStrategy.rollingUpdate.rollingUpdateType was removed; cube-node is a native apps/v1 DaemonSet. Remove rollingUpdateType from your values." }}
+{{- end }}
+{{- $installerRolling := (((.Values.cubeNodeInstaller).updateStrategy).rollingUpdate) | default dict -}}
+{{- if hasKey $installerRolling "rollingUpdateType" }}
+{{- fail "cubeNodeInstaller.updateStrategy.rollingUpdate.rollingUpdateType was removed; cube-node-installer is a native apps/v1 DaemonSet. Remove rollingUpdateType from your values." }}
+{{- end }}
+{{- $bootstrapRolling := (((.Values.cubeNodeBootstrap).updateStrategy).rollingUpdate) | default dict -}}
+{{- if hasKey $bootstrapRolling "rollingUpdateType" }}
+{{- fail "cubeNodeBootstrap.updateStrategy.rollingUpdate.rollingUpdateType was removed; cube-node-bootstrap is a native apps/v1 DaemonSet. Remove rollingUpdateType from your values." }}
+{{- end }}
+{{- $pvmRolling := (((.Values.cubeNodePvm).updateStrategy).rollingUpdate) | default dict -}}
+{{- if hasKey $pvmRolling "rollingUpdateType" }}
+{{- fail "cubeNodePvm.updateStrategy.rollingUpdate.rollingUpdateType was removed; cube-node-pvm is a native apps/v1 DaemonSet. Remove rollingUpdateType from your values." }}
 {{- end }}
 {{- $controlPlaneNeedsMysql := and .Values.controlPlane.enabled (or .Values.controlPlane.master.enabled .Values.controlPlane.api.enabled) -}}
 {{- if and $controlPlaneNeedsMysql (not (eq (include "cube.mysqlBuiltinEnabled" .) "true")) (not .Values.mysql.host) }}
@@ -114,6 +151,17 @@
 {{- end }}
 {{- end }}
 {{- end }}
+{{- if and .Values.webui.enabled .Values.controlPlane.enabled (ne (include "cube.opsEnabled" .) "true") }}
+{{- fail "webui.enabled=true requires cubeOps.enabled=true (WebUI proxies /opsapi and SDK paths to CubeOps)" }}
+{{- end }}
+{{- if eq (include "cube.opsEnabled" .) "true" }}
+{{- if not (include "cube.masterEndpoint" .) }}
+{{- fail "cubeOps.enabled=true requires a CubeMaster endpoint (controlPlane.master or externalControlPlane.masterEndpoint)" }}
+{{- end }}
+{{- if not .Values.images.ops.repository }}
+{{- fail "cubeOps.enabled=true requires images.ops.repository" }}
+{{- end }}
+{{- end }}
 {{- if .Values.cubeEgress.enabled }}
 {{- if not (has .Values.cubeEgress.ca.mode (list "existingSecret" "selfSigned" "inline")) }}
 {{- fail "cubeEgress.ca.mode must be one of: existingSecret, selfSigned, inline" }}
@@ -126,5 +174,10 @@
 {{- end }}
 {{- if and .Values.cubeEgress.network.enabled (not .Values.cubeEgress.network.ingressInterface) }}
 {{- fail "cubeEgress.network.enabled=true requires cubeEgress.network.ingressInterface" }}
+{{- end }}
+{{- end }}
+{{- if .Values.volumeCos.enabled }}
+{{- if and (not .Values.volumeCos.existingSecret) (or (not .Values.volumeCos.secretId) (not .Values.volumeCos.secretKey) (not .Values.volumeCos.bucket)) }}
+{{- fail "volumeCos.enabled=true requires volumeCos.existingSecret or volumeCos.secretId/secretKey/bucket" }}
 {{- end }}
 {{- end }}

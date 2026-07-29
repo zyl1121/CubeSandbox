@@ -5,6 +5,10 @@ on:
     branches: [master]
     paths:
       - 'CubeAPI/**'
+      - 'CubeOps/**'
+      - 'CubeDB/**'
+      - 'CubeProxy/**'
+      - 'CubeMaster/**'
       - 'CubeShim/**'
       - 'CubeNet/**'
       - 'network-agent/**'
@@ -15,6 +19,10 @@ on:
   pull_request:
     paths:
       - 'CubeAPI/**'
+      - 'CubeOps/**'
+      - 'CubeDB/**'
+      - 'CubeProxy/**'
+      - 'CubeMaster/**'
       - 'CubeShim/**'
       - 'CubeNet/**'
       - 'network-agent/**'
@@ -32,6 +40,8 @@ on:
         options:
           - all
           - cubeapi
+          - cubeproxy
+          - cubemaster
           - cubeshim
           - network-agent
 
@@ -79,6 +89,9 @@ jobs:
 
           add_all_components() {
             add_component "CubeAPI"
+            add_component "CubeOps"
+            add_component "CubeProxy"
+            add_component "CubeMaster"
             add_component "CubeShim"
             add_component "network-agent"
           }
@@ -88,6 +101,9 @@ jobs:
             case "${selected_component}" in
               all) add_all_components ;;
               cubeapi) add_component "CubeAPI" ;;
+              cubeops) add_component "CubeOps" ;;
+              cubeproxy) add_component "CubeProxy" ;;
+              cubemaster) add_component "CubeMaster" ;;
               cubeshim) add_component "CubeShim" ;;
               network-agent) add_component "network-agent" ;;
               *)
@@ -121,6 +137,15 @@ jobs:
                 CubeAPI/*)
                   add_component "CubeAPI"
                   ;;
+                CubeOps/*|CubeDB/*)
+                  add_component "CubeOps"
+                  ;;
+                CubeProxy/*)
+                  add_component "CubeProxy"
+                  ;;
+                CubeMaster/*)
+                  add_component "CubeMaster"
+                  ;;
                 CubeShim/*)
                   add_component "CubeShim"
                   ;;
@@ -144,6 +169,9 @@ jobs:
                   component: .,
                   display_name: (
                     if . == "CubeAPI" then "CubeAPI"
+                    elif . == "CubeOps" then "CubeOps"
+                    elif . == "CubeProxy" then "CubeProxy"
+                    elif . == "CubeMaster" then "CubeMaster"
                     elif . == "CubeShim" then "CubeShim"
                     elif . == "network-agent" then "Network Agent"
                     else error("unsupported component: " + .)
@@ -151,11 +179,15 @@ jobs:
                   ),
                   make_target: (
                     if . == "CubeAPI" then "cube-api-test"
+                    elif . == "CubeOps" then "cubeops-test"
+                    elif . == "CubeProxy" then "cube-proxy-test"
+                    elif . == "CubeMaster" then "cubemaster-test"
                     elif . == "CubeShim" then "shim-test"
                     elif . == "network-agent" then "network-agent-test"
                     else error("unsupported component: " + .)
                     end
-                  )
+                  ),
+                  requires_builder: (. != "CubeProxy")
                 })
             '
           )"
@@ -182,6 +214,7 @@ jobs:
 
       - name: Detect builder changes
         id: builder_changes
+        if: matrix.requires_builder
         shell: bash
         run: |
           set -euo pipefail
@@ -214,7 +247,7 @@ jobs:
 
       - name: Log in to GitHub Container Registry
         id: ghcr_login
-        if: steps.builder_changes.outputs.changed != 'true'
+        if: matrix.requires_builder && steps.builder_changes.outputs.changed != 'true'
         continue-on-error: true
         uses: docker/login-action@v3
         with:
@@ -223,12 +256,13 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Warn about GHCR login failure
-        if: steps.ghcr_login.outcome == 'failure'
+        if: matrix.requires_builder && steps.ghcr_login.outcome == 'failure'
         shell: bash
         run: echo "::warning::GHCR login failed - will attempt pull as anonymous or build locally"
 
       - name: Resolve builder image
         id: builder_image
+        if: matrix.requires_builder
         shell: bash
         run: |
           set -euo pipefail
@@ -263,11 +297,15 @@ jobs:
         shell: bash
         env:
           MAKE_TARGET: ${{ matrix.make_target }}
+          REQUIRES_BUILDER: ${{ matrix.requires_builder }}
+          BUILDER_IMAGE: ${{ steps.builder_image.outputs.image }}
         run: |
           set -euo pipefail
 
           echo "Component: ${{ matrix.component }}"
-          echo "Builder image: ${{ steps.builder_image.outputs.image }}"
-
-          make "${MAKE_TARGET}" \
-            BUILDER_IMAGE="${{ steps.builder_image.outputs.image }}"
+          if [[ "${REQUIRES_BUILDER}" == "true" ]]; then
+            echo "Builder image: ${BUILDER_IMAGE}"
+            make "${MAKE_TARGET}" BUILDER_IMAGE="${BUILDER_IMAGE}"
+          else
+            make "${MAKE_TARGET}"
+          fi

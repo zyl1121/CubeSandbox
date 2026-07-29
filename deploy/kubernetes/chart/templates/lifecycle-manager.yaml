@@ -10,6 +10,7 @@ metadata:
     app.kubernetes.io/component: lifecycle-manager
 spec:
   replicas: {{ .Values.lifecycleManager.replicas }}
+  {{- include "cube.deploymentStrategy" . | nindent 2 }}
   selector:
     matchLabels:
       {{- include "cube.selectorLabels" . | nindent 6 }}
