@@ -1,0 +1,112 @@
+name: PR File Precheck
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+
+concurrency:
+  group: pr-file-precheck-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+env:
+  SIZE_LIMIT_MB: 5
+  MARKER: "<!-- cubesandbox-precheck:start -->"
+
+jobs:
+  precheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout base (trusted root)
+        uses: actions/checkout@v6
+        with:
+          # Default ref for pull_request_target is the base branch.
+          # Do NOT checkout the PR head into the workspace root.
+          persist-credentials: false
+          submodules: false
+          lfs: false
+
+      - name: Detect oversized or binary files
+        id: detect
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          limit_bytes=$((SIZE_LIMIT_MB * 1024 * 1024))
+          head_ref="refs/remotes/origin/pr-head"
+
+          git fetch --no-tags origin "+refs/pull/${PR_NUMBER}/head:${head_ref}"
+
+          allowlisted() {
+            case "$1" in
+              deploy/one-click/assets/bin/mkcert-v1.4.4-*|Cubelet/contrib/unsquashfs|Cubelet/contrib/unsquashfs-dio)
+                return 0
+                ;;
+              *)
+                return 1
+                ;;
+            esac
+          }
+
+          findings=""
+          while IFS=$'\t' read -r status file; do
+            [[ -z "${file}" ]] && continue
+            if allowlisted "${file}"; then
+              continue
+            fi
+            blob="${head_ref}:${file}"
+            if [[ "${status}" != "removed" ]] && git cat-file -e "${blob}" 2>/dev/null; then
+              size=$(git cat-file -s "${blob}")
+              if (( size > limit_bytes )); then
+                msg="${file}: ${size} bytes exceeds the ${SIZE_LIMIT_MB} MB precheck limit"
+                echo "::warning file=${file},title=PR File Precheck::${msg}"
+                findings+="- **${file}** — ${size} bytes (over the ${SIZE_LIMIT_MB} MB limit)\n"
+              fi
+              if (set +o pipefail; git cat-file blob "${blob}" 2>/dev/null | head -c 8000 | grep -q "$(printf '\x00')"); then
+                msg="${file}: detected as binary/blob; build artifacts should not be committed"
+                echo "::warning file=${file},title=PR File Precheck::${msg}"
+                findings+="- **${file}** — binary/blob file\n"
+              fi
+            fi
+          done < <(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}/files" --paginate --jq '.[] | [.status, .filename] | @tsv')
+
+          printf '%s' "${findings}" > /tmp/precheck-findings.txt
+          if [[ -s /tmp/precheck-findings.txt ]]; then
+            echo "found=true" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Post precheck comment
+        if: steps.detect.outputs.found == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          body_file="$(mktemp)"
+          {
+            echo "${MARKER}"
+            echo ""
+            echo "## PR File Precheck"
+            echo ""
+            echo "The following files need review:"
+            echo ""
+            cat /tmp/precheck-findings.txt
+            echo ""
+            echo "These are advisory findings. If a file is intentional, keep it and explain in a reply. To silence a known-good path, add it to the allowlist in \`.github/workflows/pr-file-precheck.yml\`."
+          } > "${body_file}"
+
+          existing="$(
+            gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" \
+              --jq '.[] | select(.body | startswith("'"${MARKER}"'")) | .id' | head -1
+          )"
+          if [[ -n "${existing}" ]]; then
+            gh api -X PATCH "repos/${{ github.repository }}/issues/comments/${existing}" \
+              -F "body=@${body_file}" > /dev/null
+          else
+            gh pr comment "${PR_NUMBER}" --body-file "${body_file}"
+          fi
