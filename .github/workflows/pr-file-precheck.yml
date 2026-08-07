@@ -53,9 +53,27 @@ jobs:
             esac
           }
 
+          human_size() {
+            local bytes=$1
+            local -a units=(B KB MB GB TB)
+            local i=0
+            local val=${bytes}
+            while (( val >= 1024 && i < 4 )); do
+              val=$(( val / 1024 ))
+              i=$(( i + 1 ))
+            done
+            printf '%s %s' "${val}" "${units[${i}]}"
+          }
+
           findings=""
           while IFS=$'\t' read -r status file; do
             [[ -z "${file}" ]] && continue
+            case "${file}" in
+              .github/workflows/*)
+                echo "::warning file=${file},title=PR File Precheck::CI workflow changed; verify it does not weaken checks"
+                findings+="- **${file}** — CI workflow changed (verify it does not weaken existing checks)"$'\n'
+                ;;
+            esac
             if allowlisted "${file}"; then
               continue
             fi
@@ -65,12 +83,12 @@ jobs:
               if (( size > limit_bytes )); then
                 msg="${file}: ${size} bytes exceeds the ${SIZE_LIMIT_MB} MB precheck limit"
                 echo "::warning file=${file},title=PR File Precheck::${msg}"
-                findings+="- **${file}** — ${size} bytes (over the ${SIZE_LIMIT_MB} MB limit)\n"
+                findings+="- **${file}** — $(human_size "${size}") (over the ${SIZE_LIMIT_MB} MB limit)"$'\n'
               fi
-              if (set +o pipefail; git cat-file blob "${blob}" 2>/dev/null | head -c 8000 | grep -q "$(printf '\x00')"); then
+              if (set +o pipefail; git cat-file blob "${blob}" 2>/dev/null | head -c 8000 | grep -q $'\x00'); then
                 msg="${file}: detected as binary/blob; build artifacts should not be committed"
                 echo "::warning file=${file},title=PR File Precheck::${msg}"
-                findings+="- **${file}** — binary/blob file\n"
+                findings+="- **${file}** — binary/blob file"$'\n'
               fi
             fi
           done < <(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}/files" --paginate --jq '.[] | [.status, .filename] | @tsv')
@@ -97,7 +115,7 @@ jobs:
             echo ""
             cat /tmp/precheck-findings.txt
             echo ""
-            echo "These are advisory findings. If a file is intentional, keep it and explain in a reply. To silence a known-good path, add it to the allowlist in \`.github/workflows/pr-file-precheck.yml\`."
+            echo "These are advisory findings for the maintainer. If a file is intentional, explain it in a reply; the maintainer decides whether to allow it."
           } > "${body_file}"
 
           existing="$(
