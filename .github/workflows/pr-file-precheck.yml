@@ -1,4 +1,4 @@
-name: PR File Precheck
+name: File Precheck
 
 on:
   pull_request_target:
@@ -70,8 +70,8 @@ jobs:
             [[ -z "${file}" ]] && continue
             case "${file}" in
               .github/workflows/*)
-                echo "::warning file=${file},title=PR File Precheck::CI workflow changed; verify it does not weaken checks"
-                findings+="- **${file}** — CI workflow changed, worth a closer look"$'\n'
+                echo "::warning file=${file},title=File Precheck::CI workflow changed; verify it does not weaken checks"
+                findings+="- **${file}** — CI workflow changed, review needed"$'\n'
                 ;;
             esac
             if allowlisted "${file}"; then
@@ -82,13 +82,13 @@ jobs:
               size=$(git cat-file -s "${blob}")
               if (( size > limit_bytes )); then
                 msg="${file}: ${size} bytes exceeds the ${SIZE_LIMIT_MB} MB precheck limit"
-                echo "::warning file=${file},title=PR File Precheck::${msg}"
+                echo "::warning file=${file},title=File Precheck::${msg}"
                 findings+="- **${file}** — $(human_size "${size}"), over the ${SIZE_LIMIT_MB} MB limit"$'\n'
               fi
               if [[ $(git cat-file blob "${blob}" 2>/dev/null | head -c 8000 | tr -d '\000' | wc -c) -lt $(git cat-file blob "${blob}" 2>/dev/null | head -c 8000 | wc -c) ]]; then
                 msg="${file}: detected as binary/blob; build artifacts should not be committed"
-                echo "::warning file=${file},title=PR File Precheck::${msg}"
-                findings+="- **${file}** — looks like a binary file"$'\n'
+                echo "::warning file=${file},title=File Precheck::${msg}"
+                findings+="- **${file}** — binary file"$'\n'
               fi
             fi
           done < <(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}/files" --paginate --jq '.[] | [.status, .filename] | @tsv')
@@ -109,13 +109,13 @@ jobs:
           {
             echo "${MARKER}"
             echo ""
-            echo "## PR file precheck"
+            echo "## File Precheck"
             echo ""
-            echo "Heads up, a few files look suspicious:"
+            echo "The following files may need attention:"
             echo ""
             cat /tmp/precheck-findings.txt
             echo ""
-            echo "If they're intentional, just say so. Otherwise, please remove them."
+            echo "If they are intentional, a short note is enough. Otherwise, please remove them."
           } > "${body_file}"
 
           existing="$(
