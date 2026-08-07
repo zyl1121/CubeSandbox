@@ -71,7 +71,7 @@ jobs:
             case "${file}" in
               .github/workflows/*)
                 echo "::warning file=${file},title=PR File Precheck::CI workflow changed; verify it does not weaken checks"
-                findings+="- **${file}** — CI workflow changed (verify it does not weaken existing checks)"$'\n'
+                findings+="- **${file}** — CI workflow changed, worth a closer look"$'\n'
                 ;;
             esac
             if allowlisted "${file}"; then
@@ -83,12 +83,12 @@ jobs:
               if (( size > limit_bytes )); then
                 msg="${file}: ${size} bytes exceeds the ${SIZE_LIMIT_MB} MB precheck limit"
                 echo "::warning file=${file},title=PR File Precheck::${msg}"
-                findings+="- **${file}** — $(human_size "${size}") (over the ${SIZE_LIMIT_MB} MB limit)"$'\n'
+                findings+="- **${file}** — $(human_size "${size}"), over the ${SIZE_LIMIT_MB} MB limit"$'\n'
               fi
               if [[ $(git cat-file blob "${blob}" 2>/dev/null | head -c 8000 | tr -d '\000' | wc -c) -lt $(git cat-file blob "${blob}" 2>/dev/null | head -c 8000 | wc -c) ]]; then
                 msg="${file}: detected as binary/blob; build artifacts should not be committed"
                 echo "::warning file=${file},title=PR File Precheck::${msg}"
-                findings+="- **${file}** — binary/blob file"$'\n'
+                findings+="- **${file}** — looks like a binary file"$'\n'
               fi
             fi
           done < <(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}/files" --paginate --jq '.[] | [.status, .filename] | @tsv')
@@ -109,13 +109,13 @@ jobs:
           {
             echo "${MARKER}"
             echo ""
-            echo "## PR File Precheck"
+            echo "## PR file precheck"
             echo ""
-            echo "The following files need review:"
+            echo "Heads up, a few files look suspicious:"
             echo ""
             cat /tmp/precheck-findings.txt
             echo ""
-            echo "These are advisory findings for the maintainer. If a file is intentional, explain it in a reply; the maintainer decides whether to allow it."
+            echo "If they're intentional, just say so. Otherwise, please remove them."
           } > "${body_file}"
 
           existing="$(
