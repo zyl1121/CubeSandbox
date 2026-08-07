@@ -14,7 +14,7 @@ permissions:
 
 env:
   SIZE_LIMIT_MB: 5
-  MARKER: "<!-- cubesandbox-precheck:start -->"
+  MARKER: "<!-- cubesandbox-file-precheck:v1 -->"
 
 jobs:
   precheck:
@@ -66,9 +66,17 @@ jobs:
           }
 
           findings=""
-          while IFS=$'\t' read -r status file; do
+          while IFS=$'\t' read -r status file previous_file; do
             [[ -z "${file}" ]] && continue
-            case "${file}" in
+            workflow_file="${file}"
+            case "${workflow_file}" in
+              .github/workflows/*)
+                ;;
+              *)
+                workflow_file="${previous_file}"
+                ;;
+            esac
+            case "${workflow_file}" in
               .github/workflows/*)
                 echo "::warning file=${file},title=File Precheck::CI workflow changed; verify it does not weaken checks"
                 findings+="- **${file}** — CI workflow changed, review needed"$'\n'
@@ -91,40 +99,76 @@ jobs:
                 findings+="- **${file}** — binary file"$'\n'
               fi
             fi
-          done < <(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}/files" --paginate --jq '.[] | [.status, .filename] | @tsv')
+          done < <(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}/files" --paginate --jq '.[] | [.status, .filename, (.previous_filename // "")] | @tsv')
 
           printf '%s' "${findings}" > /tmp/precheck-findings.txt
           if [[ -s /tmp/precheck-findings.txt ]]; then
             echo "found=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "found=false" >> "${GITHUB_OUTPUT}"
           fi
 
-      - name: Post precheck comment
-        if: steps.detect.outputs.found == 'true'
+      - name: Update precheck comment
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
           body_file="$(mktemp)"
-          {
-            echo "${MARKER}"
-            echo ""
-            echo "## File Precheck"
-            echo ""
-            echo "The following files may need attention:"
-            echo ""
-            cat /tmp/precheck-findings.txt
-            echo ""
-            echo "If they are intentional, a short note is enough. Otherwise, please remove them."
-          } > "${body_file}"
-
-          existing="$(
-            gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" \
-              --jq '.[] | select(.body | startswith("'"${MARKER}"'")) | .id' | head -1
-          )"
-          if [[ -n "${existing}" ]]; then
-            gh api -X PATCH "repos/${{ github.repository }}/issues/comments/${existing}" \
-              -F "body=@${body_file}" > /dev/null
+          comments_file="$(mktemp)"
+          if ! gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" --paginate \
+            --jq '.[] | select(.user.login == "github-actions[bot]") | select(.body | startswith("'"${MARKER}"'")) | [.id, (.body | @base64)] | @tsv' \
+            > "${comments_file}"; then
+            echo "::warning title=File Precheck::Could not list existing File Precheck comments"
+            exit 0
+          fi
+          mapfile -t existing < "${comments_file}"
+          if [[ "${{ steps.detect.outputs.found }}" == "true" ]]; then
+            {
+              echo "${MARKER}"
+              echo ""
+              echo "## File Precheck"
+              echo ""
+              echo "The following files may need attention:"
+              echo ""
+              cat /tmp/precheck-findings.txt
+              echo ""
+              echo "If they are intentional, a short note is enough. Otherwise, please remove them."
+            } > "${body_file}"
+          elif (( ${#existing[@]} > 0 )); then
+            {
+              echo "${MARKER}"
+              echo ""
+              echo "## File Precheck"
+              echo ""
+              echo "No suspicious files found in the latest revision."
+              echo ""
+              echo "Previous findings, if any, have been resolved."
+            } > "${body_file}"
           else
+            exit 0
+          fi
+
+          current_comment=""
+          for comment in "${existing[@]}"; do
+            IFS=$'\t' read -r comment_id encoded_body <<< "${comment}"
+            printf '%s' "${encoded_body}" | base64 --decode > /tmp/precheck-existing-comment.txt
+            if cmp -s "${body_file}" /tmp/precheck-existing-comment.txt; then
+              current_comment="${comment_id}"
+            fi
+          done
+
+          if [[ -z "${current_comment}" ]]; then
+            # Create the latest status first so a posting failure cannot remove
+            # the previous result. The snapshot contains only this workflow's
+            # bot comments, identified by both author and the exclusive marker.
             gh pr comment "${PR_NUMBER}" --body-file "${body_file}"
           fi
+
+          for comment in "${existing[@]}"; do
+            IFS=$'\t' read -r comment_id _ <<< "${comment}"
+            [[ "${comment_id}" == "${current_comment}" ]] && continue
+            if ! gh api -X DELETE "repos/${{ github.repository }}/issues/comments/${comment_id}"; then
+              echo "::warning title=File Precheck::Could not remove an older File Precheck comment"
+            fi
+          done
