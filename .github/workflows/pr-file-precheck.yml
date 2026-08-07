@@ -85,7 +85,7 @@ jobs:
                 echo "::warning file=${file},title=PR File Precheck::${msg}"
                 findings+="- **${file}** — $(human_size "${size}") (over the ${SIZE_LIMIT_MB} MB limit)"$'\n'
               fi
-              if (set +o pipefail; git cat-file blob "${blob}" 2>/dev/null | head -c 8000 | grep -q $'\x00'); then
+              if [[ $(git cat-file blob "${blob}" 2>/dev/null | head -c 8000 | tr -d '\000' | wc -c) -lt $(git cat-file blob "${blob}" 2>/dev/null | head -c 8000 | wc -c) ]]; then
                 msg="${file}: detected as binary/blob; build artifacts should not be committed"
                 echo "::warning file=${file},title=PR File Precheck::${msg}"
                 findings+="- **${file}** — binary/blob file"$'\n'
