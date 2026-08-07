@@ -75,6 +75,21 @@ jobs:
           else
             mv review-input/pr.diff.tmp review-input/pr.diff
           fi
+          # Per-file byte sizes for the full changed-file list, computed from
+          # the PR head ref fetched read-only (never executed).
+          git fetch --no-tags origin "+refs/pull/${PR_NUMBER}/head:refs/remotes/origin/pr-head"
+          gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/files" --paginate \
+            --jq '.[] | [.status, .filename] | @tsv' > review-input/files.tsv
+          while IFS=$'\t' read -r status file; do
+            blob="refs/remotes/origin/pr-head:${file}"
+            if git cat-file -e "${blob}" 2>/dev/null; then
+              size=$(git cat-file -s "${blob}")
+            else
+              size="?"
+            fi
+            printf '%s\t%s\t%s\n' "${status}" "${size}" "${file}"
+          done < review-input/files.tsv > review-input/files.txt
+          rm -f review-input/files.tsv
 
       - name: Run Claude review
         uses: anthropics/claude-code-action@v1
@@ -97,7 +112,8 @@ jobs:
 
             Required reading (do this first):
             1. review-input/meta.json
-            2. review-input/pr.diff
+            2. review-input/files.txt — full changed-file list with byte sizes
+            3. review-input/pr.diff
             If review-input/TRUNCATED exists, note that the diff was truncated.
 
             The workspace is the base branch. For surrounding context, Read files

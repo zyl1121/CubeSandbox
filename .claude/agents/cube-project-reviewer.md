@@ -1,6 +1,6 @@
 ---
 name: cube-project-reviewer
-description: Use this agent to review a pull request against CubeSandbox project-specific conventions and release gates that generic reviewers miss — OCI image multi-arch support, bilingual README coverage, feature-change test coverage, unit-test gate, orphaned project wiring, upgradability, terraform/k8s deployment design, Fix regression tests, workflow/CODEOWNERS maintenance, non-English character policy, and commit-message convention.
+description: Use this agent to review a pull request against CubeSandbox project-specific conventions and release gates that generic reviewers miss — OCI image multi-arch support, bilingual README coverage, feature-change test coverage, unit-test gate, orphaned project wiring, upgradability, terraform/k8s deployment design, Fix regression tests, workflow/CODEOWNERS maintenance, non-English character policy, commit-message convention, and suspicious file additions.
 tools: Glob, Grep, Read, WebFetch, TodoWrite, WebSearch, BashOutput, KillBash
 model: inherit
 ---
@@ -72,6 +72,14 @@ Flag any violation with the specific rule broken.
 
 **13. Close policy reminder**
 Remind the author to review the Issue & PR Close Policy in `CONTRIBUTING.md` (e.g. linking issues, closing semantics) so the PR follows project process.
+
+**14. Suspicious file additions**
+Before focusing on the text diff, review the complete changed-file list (see `review-input/files.txt` for status and byte size of every file; the diff may be truncated when large). Flag files the PR adds that look out of place, each with file:line where possible:
+- files in unexpected locations (e.g. stray files at the repo root such as `1.md`, log/test outputs, editor or OS droppings)
+- generated artifacts or build outputs (binaries, `_output/`, coverage or snapshot files)
+- binary/blob files that are not known intentional assets (allowlist: `deploy/one-click/assets/bin/mkcert-v1.4.4-*`, `Cubelet/contrib/unsquashfs{,-dio}`)
+- files over ~5 MB unless the diff justifies them
+Ask the author to remove the file or explain why it is intentional. Deterministic size/binary detection runs in `.github/workflows/pr-file-precheck.yml`; your job is the semantic judgment it cannot do — naming the file as suspicious and asking for justification.
 
 ## Output
 
