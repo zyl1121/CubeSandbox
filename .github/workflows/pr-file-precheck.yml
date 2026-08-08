@@ -446,16 +446,13 @@ jobs:
                       "This PR includes file changes that need review before this check can pass.", "",
                   ])
               lines.extend(["<!-- findings:start -->", rendered, "<!-- findings:end -->", ""])
-              lines.extend([
-                  f"Findings ID: `{metadata['fingerprint'][:16]}`", "",
-              ])
               if state == "acknowledged":
                   lines.extend([
                       "Approval remains valid while this exact set of flagged paths, contents, and reasons is unchanged. Adding, removing, or changing a flagged finding requires a new approval.",
                   ])
               else:
                   lines.extend([
-                      "If these changes are accidental, update the PR.", "",
+                      "If any flagged changes are unintentional, please remove or correct them.", "",
                       "If they are intentional, a maintainer with write, maintain, or admin repository permission can approve this exact set by commenting:", "",
                       "```text", f"/file-precheck approve {metadata['approval_id']}", "```",
                       "", "Approval remains valid while this exact set of flagged paths, contents, and reasons is unchanged. Adding, removing, or changing a flagged finding requires a new approval.",
