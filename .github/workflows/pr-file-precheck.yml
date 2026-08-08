@@ -419,7 +419,7 @@ jobs:
               if state == "resolved":
                   return "\n".join([
                       marker, f"{metadata_prefix} {encoded} -->", "", "## File Precheck — resolved", "",
-                      "No suspicious files were found in the latest revision.", "", "<details>",
+                      "The latest revision has no file changes requiring precheck review.", "", "<details>",
                       "<summary>Previously reported findings</summary>", "", previous_block, "", "</details>", "",
                       "Large, binary, archive, executable, database, document, and workflow files are allowed when intentional.",
                   ])
@@ -464,7 +464,7 @@ jobs:
               with open(summary_path, "a", encoding="utf-8") as stream:
                   stream.write("## File Precheck\n\n")
                   if not findings:
-                      stream.write("No suspicious files found.\n")
+                      stream.write("No file changes require precheck review.\n")
                       return
                   stream.write(f"{len(findings)} findings. Fingerprint: `{fingerprint}`\n\n")
                   for item in findings:
@@ -502,7 +502,7 @@ jobs:
                   body = comment_body(state, new_metadata, findings, approval=approval)
                   sync_reactions(valid, unauthorized)
                   semantic_state = "success" if approval else "failure"
-                  description = "Suspicious files acknowledged by a maintainer" if approval else "Suspicious files require maintainer review"
+                  description = "Flagged file changes acknowledged by a maintainer" if approval else "Flagged file changes require maintainer review"
               elif canonical:
                   if metadata and metadata.get("state") == "resolved":
                       body = canonical.get("body") or ""
@@ -511,11 +511,11 @@ jobs:
                       new_metadata = {"version": 2, "state": "resolved"}
                       body = comment_body("resolved", new_metadata, [], previous_block=previous_block)
                   semantic_state = "success"
-                  description = "No suspicious files found"
+                  description = "No file changes require precheck review"
               else:
                   body = None
                   semantic_state = "success"
-                  description = "No suspicious files found"
+                  description = "No file changes require precheck review"
 
               if body is not None:
                   if canonical:
