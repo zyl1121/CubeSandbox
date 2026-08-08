@@ -175,7 +175,9 @@ jobs:
                            .replace(",", "%2C"))
 
           def display_path(path):
-              return path.encode("utf-8", "surrogateescape").decode("utf-8", "backslashreplace")
+              value = path.encode("utf-8", "surrogateescape").decode("utf-8", "backslashreplace")
+              return (value.replace("\\", "\\\\").replace("\r", "\\r")
+                           .replace("\n", "\\n").replace("\t", "\\t"))
 
           def annotate(path, message):
               safe_path = workflow_command_escape(display_path(path))
@@ -192,40 +194,41 @@ jobs:
               return f"{value:.1f} {units[index]}" if index else f"{size} B"
 
           def path_text(path):
-              return f"<code>{html.escape(display_path(path), quote=False)}</code>"
+              safe = html.escape(display_path(path), quote=False).replace("|", "&#124;")
+              return f"<code>{safe}</code>"
 
           def detect_signature(prefix):
               if prefix.startswith((b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")):
-                  return "ZIP archive signature detected"
+                  return "ZIP archive detected"
               if prefix.startswith(b"\x1f\x8b"):
-                  return "gzip archive signature detected"
+                  return "gzip archive detected"
               if prefix.startswith(b"BZh"):
-                  return "bzip2 archive signature detected"
+                  return "bzip2 archive detected"
               if prefix.startswith(b"\xfd7zXZ\x00"):
-                  return "xz archive signature detected"
+                  return "xz archive detected"
               if prefix.startswith(b"7z\xbc\xaf\x27\x1c"):
-                  return "7-Zip archive signature detected"
+                  return "7-Zip archive detected"
               if prefix.startswith((b"Rar!\x1a\x07\x00", b"Rar!\x1a\x07\x01\x00")):
-                  return "RAR archive signature detected"
+                  return "RAR archive detected"
               if len(prefix) >= 262 and prefix[257:262] == b"ustar":
-                  return "tar archive signature detected"
+                  return "tar archive detected"
               if prefix.startswith(b"\x7fELF"):
-                  return "ELF executable signature detected"
+                  return "ELF executable detected"
               if prefix.startswith(b"MZ") and len(prefix) >= 64:
                   offset = int.from_bytes(prefix[60:64], "little")
                   if offset + 4 <= len(prefix) and prefix[offset:offset + 4] == b"PE\x00\x00":
-                      return "PE executable signature detected"
+                      return "PE executable detected"
               if prefix[:4] in {
                   b"\xfe\xed\xfa\xce", b"\xfe\xed\xfa\xcf", b"\xce\xfa\xed\xfe",
                   b"\xcf\xfa\xed\xfe", b"\xca\xfe\xba\xbe", b"\xbe\xba\xfe\xca",
               }:
-                  return "Mach-O executable signature detected"
+                  return "Mach-O executable detected"
               if prefix.startswith(b"\x00asm"):
-                  return "WebAssembly binary signature detected"
+                  return "WebAssembly binary detected"
               if prefix.startswith(b"SQLite format 3\x00"):
-                  return "SQLite database signature detected"
+                  return "SQLite database detected"
               if prefix.startswith(b"%PDF-"):
-                  return "PDF document signature detected"
+                  return "PDF document detected"
               return None
 
           def read_blob(ref, path):
@@ -305,13 +308,13 @@ jobs:
                   if object_type != "blob":
                       continue
                   if size > size_limit:
-                      findings.append({**change, "reason": "large", "detail": f"{format_size(size)} ({size:,} bytes) exceeds the 5 MiB threshold", "blob": oid, "size": size})
+                      findings.append({**change, "reason": "large", "detail": f"{format_size(size)} ({size:,} bytes); over the 5 MiB threshold", "blob": oid, "size": size})
                   prefix, has_nul = read_blob(head_ref, path)
                   signature = detect_signature(prefix)
                   if signature:
                       findings.append({**change, "reason": "format", "detail": signature, "blob": oid, "size": size})
                   elif has_nul:
-                      findings.append({**change, "reason": "binary", "detail": "NUL byte detected; file may be binary", "blob": oid, "size": size})
+                      findings.append({**change, "reason": "binary", "detail": "Binary content detected (NUL byte)", "blob": oid, "size": size})
               findings.sort(key=lambda item: (
                   item["path"].encode("utf-8", "surrogateescape"),
                   item["previous"].encode("utf-8", "surrogateescape"),
@@ -327,24 +330,30 @@ jobs:
                   "detail": item["detail"], "blob": item["blob"], "size": item["size"],
               }
 
-          def render_finding(item):
+          def finding_location(item):
               if item["previous"]:
-                  location = f"{path_text(item['previous'])} → {path_text(item['path'])}"
-              else:
-                  location = path_text(item["path"])
-              return f"- {location} — {html.escape(item['detail'])}"
+                  return f"{path_text(item['previous'])} → {path_text(item['path'])}"
+              return path_text(item["path"])
 
           def render_findings(findings, budget=42000):
-              lines = []
-              used = 0
+              grouped = []
               for item in findings:
-                  line = render_finding(item)
+                  key = (item["status"], item["path"], item["previous"])
+                  if not grouped or grouped[-1][0] != key:
+                      grouped.append((key, item, []))
+                  grouped[-1][2].append(item["detail"])
+              lines = ["| File | Reason |", "| --- | --- |"]
+              used = 0
+              shown_findings = 0
+              for _, item, details in grouped:
+                  line = f"| {finding_location(item)} | {'; '.join(html.escape(detail) for detail in details)} |"
                   encoded_size = len((line + "\n").encode("utf-8", "surrogateescape"))
                   if used + encoded_size > budget:
                       break
                   lines.append(line)
                   used += encoded_size
-              omitted = len(findings) - len(lines)
+                  shown_findings += len(details)
+              omitted = len(findings) - shown_findings
               if omitted:
                   lines.append("")
                   lines.append(f"_{omitted} additional findings are omitted here. The approval ID covers all {len(findings)} findings; see the workflow run for the complete list._")
@@ -421,7 +430,6 @@ jobs:
                       marker, f"{metadata_prefix} {encoded} -->", "", "## File Precheck — resolved", "",
                       "No file changes in the latest revision need precheck review.", "", "<details>",
                       "<summary>Previously reported findings</summary>", "", previous_block, "", "</details>", "",
-                      "Large, binary, archive, executable, database, document, and workflow files are allowed when intentional.",
                   ])
               rendered, _ = render_findings(findings)
               lines = [marker, f"{metadata_prefix} {encoded} -->", ""]
@@ -429,27 +437,28 @@ jobs:
                   login = html.escape((approval.get("user") or {}).get("login", ""), quote=False)
                   timestamp = approval.get("updated_at") or approval.get("created_at")
                   lines.extend([
-                      "## File Precheck — acknowledged", "",
-                      f"Acknowledged by @{login} at {timestamp} ([approval comment]({approval['html_url']})).", "",
+                      "## File Precheck — approved", "",
+                      f"Approved by @{login} at {timestamp} ([approval comment]({approval['html_url']})).", "",
                   ])
               else:
                   lines.extend([
-                      "## File Precheck — maintainer review required", "",
-                      "This check flagged the following file changes for maintainer review:", "",
+                      "## File Precheck — review needed", "",
+                      "This PR includes file changes that need review before this check can pass.", "",
                   ])
               lines.extend(["<!-- findings:start -->", rendered, "<!-- findings:end -->", ""])
               lines.extend([
-                  "Large, binary, archive, executable, database, document, and workflow files are allowed when intentional. These findings report file facts; maintainers decide whether each change belongs in the pull request.", "",
                   f"Findings ID: `{metadata['fingerprint'][:16]}`", "",
               ])
               if state == "acknowledged":
                   lines.extend([
-                      "This acknowledgement applies to this exact findings episode. Any change to the findings requires another acknowledgement.",
+                      "Approval applies only to the flagged paths and contents above. Any change to the findings requires another approval.",
                   ])
               else:
                   lines.extend([
-                      "A repository member with write, maintain, or admin permission can acknowledge this exact findings episode by posting:", "",
+                      "If these changes are accidental, update the PR.", "",
+                      "If they are intentional, a maintainer with write, maintain, or admin permission can approve this exact set by commenting:", "",
                       "```text", f"/file-precheck approve {metadata['approval_id']}", "```",
+                      "", "Approval applies only to the flagged paths and contents above.",
                   ])
               return "\n".join(lines)
 
@@ -467,7 +476,7 @@ jobs:
                       return
                   stream.write(f"{len(findings)} findings. Fingerprint: `{fingerprint}`\n\n")
                   for item in findings:
-                      stream.write(render_finding(item) + "\n")
+                      stream.write(f"- {finding_location(item)} — {html.escape(item['detail'])}\n")
 
           def update_comment(comments, findings, fingerprint, head_sha):
               owned = sorted(
@@ -501,7 +510,7 @@ jobs:
                   body = comment_body(state, new_metadata, findings, approval=approval)
                   sync_reactions(valid, unauthorized)
                   semantic_state = "success" if approval else "failure"
-                  description = "Flagged file changes acknowledged by a maintainer" if approval else "File changes flagged for maintainer review"
+                  description = "File changes approved" if approval else "File changes need review"
               elif canonical:
                   if metadata and metadata.get("state") == "resolved":
                       body = canonical.get("body") or ""
@@ -510,11 +519,11 @@ jobs:
                       new_metadata = {"version": 2, "state": "resolved"}
                       body = comment_body("resolved", new_metadata, [], previous_block=previous_block)
                   semantic_state = "success"
-                  description = "No file changes need precheck review"
+                  description = "No file changes need review"
               else:
                   body = None
                   semantic_state = "success"
-                  description = "No file changes need precheck review"
+                  description = "No file changes need review"
 
               if body is not None:
                   if canonical:
