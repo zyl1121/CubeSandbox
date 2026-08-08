@@ -457,7 +457,7 @@ jobs:
                   lines.extend([
                       "If these changes are accidental, update the PR.", "",
                       "If they are intentional, a maintainer with write, maintain, or admin repository permission can approve this exact set by commenting:", "",
-                      f"`/file-precheck approve {metadata['approval_id']}`",
+                      "```text", f"/file-precheck approve {metadata['approval_id']}", "```",
                       "", "Approval applies only to the flagged paths and contents above.",
                   ])
               return "\n".join(lines)
