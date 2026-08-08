@@ -451,14 +451,14 @@ jobs:
               ])
               if state == "acknowledged":
                   lines.extend([
-                      "Approval applies only to the flagged paths and contents above. Any change to the findings requires another approval.",
+                      "Approval remains valid while this exact set of flagged paths, contents, and reasons is unchanged. Adding, removing, or changing a flagged finding requires a new approval.",
                   ])
               else:
                   lines.extend([
                       "If these changes are accidental, update the PR.", "",
                       "If they are intentional, a maintainer with write, maintain, or admin repository permission can approve this exact set by commenting:", "",
                       "```text", f"/file-precheck approve {metadata['approval_id']}", "```",
-                      "", "Approval applies only to the flagged paths and contents above.",
+                      "", "Approval remains valid while this exact set of flagged paths, contents, and reasons is unchanged. Adding, removing, or changing a flagged finding requires a new approval.",
                   ])
               return "\n".join(lines)
 
