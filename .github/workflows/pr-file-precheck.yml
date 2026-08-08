@@ -1,174 +1,587 @@
-name: File Precheck
+name: File Precheck Evaluator
 
 on:
   pull_request_target:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, ready_for_review]
+  issue_comment:
+    types: [created, edited, deleted]
 
 concurrency:
-  group: pr-file-precheck-${{ github.event.pull_request.number }}
+  group: >-
+    ${{
+      (
+        github.event_name == 'pull_request_target' ||
+        contains(github.event.comment.body, '/file-precheck approve') ||
+        contains(github.event.changes.body.from, '/file-precheck approve') ||
+        (
+          github.event.action == 'deleted' &&
+          (
+            contains(github.event.comment.body, '<!-- cubesandbox-file-precheck:v2 -->') ||
+            contains(github.event.comment.body, '<!-- cubesandbox-file-precheck:v1 -->')
+          )
+        )
+      ) && format('pr-file-precheck-{0}', github.event.pull_request.number || github.event.issue.number)
+      || format('pr-file-precheck-ignored-{0}', github.run_id)
+    }}
   cancel-in-progress: true
 
 permissions:
   contents: read
   pull-requests: write
-
-env:
-  SIZE_LIMIT_MB: 5
-  MARKER: "<!-- cubesandbox-file-precheck:v1 -->"
+  statuses: write
 
 jobs:
   precheck:
+    # Ordinary PR discussion cannot change an acknowledgement. An edited
+    # comment is relevant when either its old or new body contains the command.
+    if: >-
+      github.event_name == 'pull_request_target' ||
+      (
+        github.event.issue.pull_request &&
+        (
+          contains(github.event.comment.body, '/file-precheck approve') ||
+          contains(github.event.changes.body.from, '/file-precheck approve') ||
+          (
+            github.event.action == 'deleted' &&
+            (
+              contains(github.event.comment.body, '<!-- cubesandbox-file-precheck:v2 -->') ||
+              contains(github.event.comment.body, '<!-- cubesandbox-file-precheck:v1 -->')
+            )
+          )
+        )
+      )
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+      REPOSITORY: ${{ github.repository }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
       - name: Checkout base (trusted root)
         uses: actions/checkout@v6
         with:
-          # Default ref for pull_request_target is the base branch.
-          # Do NOT checkout the PR head into the workspace root.
+          # pull_request_target and issue_comment run in trusted base context.
+          # Never checkout the PR head into the workspace root.
           persist-credentials: false
           submodules: false
           lfs: false
 
-      - name: Detect oversized or binary files
-        id: detect
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
+      - name: Evaluate changed files and acknowledgement
+        shell: bash
         run: |
           set -euo pipefail
-          limit_bytes=$((SIZE_LIMIT_MB * 1024 * 1024))
-          head_ref="refs/remotes/origin/pr-head"
+          python3 - <<'PY'
+          import base64
+          import hashlib
+          import html
+          import json
+          import os
+          import re
+          import subprocess
+          import sys
+          import urllib.error
+          import urllib.parse
+          import urllib.request
 
-          git fetch --no-tags origin "+refs/pull/${PR_NUMBER}/head:${head_ref}"
+          repository = os.environ["REPOSITORY"]
+          pr_number = int(os.environ["PR_NUMBER"])
+          token = os.environ["GH_TOKEN"]
+          run_url = os.environ["RUN_URL"]
+          run_id = os.environ["GITHUB_RUN_ID"]
+          api_url = os.environ.get("GITHUB_API_URL", "https://api.github.com")
+          marker = "<!-- cubesandbox-file-precheck:v2 -->"
+          legacy_marker = "<!-- cubesandbox-file-precheck:v1 -->"
+          metadata_prefix = "<!-- cubesandbox-file-precheck-metadata:"
+          status_context = "File Precheck"
+          size_limit = 5 * 1024 * 1024
+          command_re = re.compile(r"/file-precheck approve ([0-9a-f]{64})\Z")
+          allowed_permissions = {"write", "maintain", "admin"}
+          bot_login = "github-actions[bot]"
 
-          allowlisted() {
-            case "$1" in
-              deploy/one-click/assets/bin/mkcert-v1.4.4-*|Cubelet/contrib/unsquashfs|Cubelet/contrib/unsquashfs-dio)
-                return 0
-                ;;
-              *)
-                return 1
-                ;;
-            esac
-          }
+          class StaleRun(Exception):
+              pass
 
-          human_size() {
-            local bytes=$1
-            local -a units=(B KB MB GB TB)
-            local i=0
-            local val=${bytes}
-            while (( val >= 1024 && i < 4 )); do
-              val=$(( val / 1024 ))
-              i=$(( i + 1 ))
-            done
-            printf '%s %s' "${val}" "${units[${i}]}"
-          }
+          def api(method, path, payload=None, *, accept=None, paginate=False):
+              url = path if path.startswith("http") else f"{api_url}{path}"
+              results = []
+              while url:
+                  headers = {
+                      "Authorization": f"Bearer {token}",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                      "User-Agent": "cubesandbox-file-precheck",
+                  }
+                  if accept:
+                      headers["Accept"] = accept
+                  data = None
+                  if payload is not None:
+                      headers["Content-Type"] = "application/json"
+                      data = json.dumps(payload).encode()
+                  request = urllib.request.Request(url, data=data, headers=headers, method=method)
+                  try:
+                      with urllib.request.urlopen(request) as response:
+                          raw = response.read()
+                          value = json.loads(raw) if raw else None
+                          if paginate:
+                              results.extend(value)
+                              link = response.headers.get("Link", "")
+                              match = re.search(r'<([^>]+)>; rel="next"', link)
+                              url = match.group(1) if match else None
+                          else:
+                              return value
+                  except urllib.error.HTTPError as error:
+                      detail = error.read().decode(errors="replace")
+                      raise RuntimeError(f"GitHub API {method} {path} failed: {error.code}: {detail}") from error
+              return results
 
-          findings=""
-          while IFS=$'\t' read -r status file previous_file; do
-            [[ -z "${file}" ]] && continue
-            workflow_file="${file}"
-            case "${workflow_file}" in
-              .github/workflows/*)
-                ;;
-              *)
-                workflow_file="${previous_file}"
-                ;;
-            esac
-            case "${workflow_file}" in
-              .github/workflows/*)
-                echo "::warning file=${file},title=File Precheck::CI workflow changed; verify it does not weaken checks"
-                findings+="- **${file}** — CI workflow changed, review needed"$'\n'
-                ;;
-            esac
-            if allowlisted "${file}"; then
-              continue
-            fi
-            blob="${head_ref}:${file}"
-            if [[ "${status}" != "removed" ]] && git cat-file -e "${blob}" 2>/dev/null; then
-              size=$(git cat-file -s "${blob}")
-              if (( size > limit_bytes )); then
-                msg="${file}: ${size} bytes exceeds the ${SIZE_LIMIT_MB} MB precheck limit"
-                echo "::warning file=${file},title=File Precheck::${msg}"
-                findings+="- **${file}** — $(human_size "${size}"), over the ${SIZE_LIMIT_MB} MB limit"$'\n'
-              fi
-              if [[ $(git cat-file blob "${blob}" 2>/dev/null | head -c 8000 | tr -d '\000' | wc -c) -lt $(git cat-file blob "${blob}" 2>/dev/null | head -c 8000 | wc -c) ]]; then
-                msg="${file}: detected as binary/blob; build artifacts should not be committed"
-                echo "::warning file=${file},title=File Precheck::${msg}"
-                findings+="- **${file}** — binary file"$'\n'
-              fi
-            fi
-          done < <(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}/files" --paginate --jq '.[] | [.status, .filename, (.previous_filename // "")] | @tsv')
+          def git(*args, input_bytes=None):
+              return subprocess.run(
+                  ["git", *args], input=input_bytes, stdout=subprocess.PIPE,
+                  stderr=subprocess.PIPE, check=True,
+              ).stdout
 
-          printf '%s' "${findings}" > /tmp/precheck-findings.txt
-          if [[ -s /tmp/precheck-findings.txt ]]; then
-            echo "found=true" >> "${GITHUB_OUTPUT}"
-          else
-            echo "found=false" >> "${GITHUB_OUTPUT}"
-          fi
+          def set_status(sha, state, description):
+              api("POST", f"/repos/{repository}/statuses/{sha}", {
+                  "state": state,
+                  "context": status_context,
+                  "description": description[:140],
+                  "target_url": run_url,
+              })
 
-      - name: Update precheck comment
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: |
-          set -euo pipefail
-          body_file="$(mktemp)"
-          comments_file="$(mktemp)"
-          if ! gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" --paginate \
-            --jq '.[] | select(.user.login == "github-actions[bot]") | select(.body | startswith("'"${MARKER}"'")) | [.id, (.body | @base64)] | @tsv' \
-            > "${comments_file}"; then
-            echo "::warning title=File Precheck::Could not list existing File Precheck comments"
-            exit 0
-          fi
-          mapfile -t existing < "${comments_file}"
-          if [[ "${{ steps.detect.outputs.found }}" == "true" ]]; then
-            {
-              echo "${MARKER}"
-              echo ""
-              echo "## File Precheck"
-              echo ""
-              echo "The following files may need attention:"
-              echo ""
-              cat /tmp/precheck-findings.txt
-              echo ""
-              echo "If they are intentional, a short note is enough. Otherwise, please remove them."
-            } > "${body_file}"
-          elif (( ${#existing[@]} > 0 )); then
-            {
-              echo "${MARKER}"
-              echo ""
-              echo "## File Precheck"
-              echo ""
-              echo "No suspicious files found in the latest revision."
-              echo ""
-              echo "Previous findings, if any, have been resolved."
-            } > "${body_file}"
-          else
-            exit 0
-          fi
+          def get_pr():
+              return api("GET", f"/repos/{repository}/pulls/{pr_number}")
 
-          current_comment=""
-          for comment in "${existing[@]}"; do
-            IFS=$'\t' read -r comment_id encoded_body <<< "${comment}"
-            printf '%s' "${encoded_body}" | base64 --decode > /tmp/precheck-existing-comment.txt
-            if cmp -s "${body_file}" /tmp/precheck-existing-comment.txt; then
-              current_comment="${comment_id}"
-            fi
-          done
+          def get_comments():
+              return api("GET", f"/repos/{repository}/issues/{pr_number}/comments?per_page=100", paginate=True)
 
-          if [[ -z "${current_comment}" ]]; then
-            # Create the latest status first so a posting failure cannot remove
-            # the previous result. The snapshot contains only this workflow's
-            # bot comments, identified by both author and the exclusive marker.
-            gh pr comment "${PR_NUMBER}" --body-file "${body_file}"
-          fi
+          def comment_metadata(body):
+              for line in body.splitlines():
+                  if line.startswith(metadata_prefix) and line.endswith(" -->"):
+                      encoded = line[len(metadata_prefix):-4].strip()
+                      try:
+                          padding = "=" * (-len(encoded) % 4)
+                          return json.loads(base64.urlsafe_b64decode(encoded + padding))
+                      except (ValueError, json.JSONDecodeError):
+                          return None
+              return None
 
-          for comment in "${existing[@]}"; do
-            IFS=$'\t' read -r comment_id _ <<< "${comment}"
-            [[ "${comment_id}" == "${current_comment}" ]] && continue
-            if ! gh api -X DELETE "repos/${{ github.repository }}/issues/comments/${comment_id}"; then
-              echo "::warning title=File Precheck::Could not remove an older File Precheck comment"
-            fi
-          done
+          def encode_metadata(value):
+              raw = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+              return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+          def workflow_command_escape(value):
+              return (value.replace("%", "%25").replace("\r", "%0D")
+                           .replace("\n", "%0A").replace(":", "%3A")
+                           .replace(",", "%2C"))
+
+          def display_path(path):
+              return path.encode("utf-8", "surrogateescape").decode("utf-8", "backslashreplace")
+
+          def annotate(path, message):
+              safe_path = workflow_command_escape(display_path(path))
+              safe_message = workflow_command_escape(message)
+              print(f"::warning file={safe_path},title=File Precheck::{safe_message}")
+
+          def format_size(size):
+              units = ["B", "KiB", "MiB", "GiB", "TiB"]
+              value = float(size)
+              index = 0
+              while value >= 1024 and index < len(units) - 1:
+                  value /= 1024
+                  index += 1
+              return f"{value:.1f} {units[index]}" if index else f"{size} B"
+
+          def path_text(path):
+              return f"<code>{html.escape(display_path(path), quote=False)}</code>"
+
+          def detect_signature(prefix):
+              if prefix.startswith((b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")):
+                  return "ZIP archive signature detected"
+              if prefix.startswith(b"\x1f\x8b"):
+                  return "gzip archive signature detected"
+              if prefix.startswith(b"BZh"):
+                  return "bzip2 archive signature detected"
+              if prefix.startswith(b"\xfd7zXZ\x00"):
+                  return "xz archive signature detected"
+              if prefix.startswith(b"7z\xbc\xaf\x27\x1c"):
+                  return "7-Zip archive signature detected"
+              if prefix.startswith((b"Rar!\x1a\x07\x00", b"Rar!\x1a\x07\x01\x00")):
+                  return "RAR archive signature detected"
+              if len(prefix) >= 262 and prefix[257:262] == b"ustar":
+                  return "tar archive signature detected"
+              if prefix.startswith(b"\x7fELF"):
+                  return "ELF executable signature detected"
+              if prefix.startswith(b"MZ") and len(prefix) >= 64:
+                  offset = int.from_bytes(prefix[60:64], "little")
+                  if offset + 4 <= len(prefix) and prefix[offset:offset + 4] == b"PE\x00\x00":
+                      return "PE executable signature detected"
+              if prefix[:4] in {
+                  b"\xfe\xed\xfa\xce", b"\xfe\xed\xfa\xcf", b"\xce\xfa\xed\xfe",
+                  b"\xcf\xfa\xed\xfe", b"\xca\xfe\xba\xbe", b"\xbe\xba\xfe\xca",
+              }:
+                  return "Mach-O executable signature detected"
+              if prefix.startswith(b"\x00asm"):
+                  return "WebAssembly binary signature detected"
+              if prefix.startswith(b"SQLite format 3\x00"):
+                  return "SQLite database signature detected"
+              if prefix.startswith(b"%PDF-"):
+                  return "PDF document signature detected"
+              return None
+
+          def read_blob(ref, path):
+              spec = f"{ref}:{path}"
+              process = subprocess.Popen(
+                  ["git", "cat-file", "blob", spec], stdout=subprocess.PIPE,
+                  stderr=subprocess.PIPE,
+              )
+              prefix = bytearray()
+              has_nul = False
+              while True:
+                  chunk = process.stdout.read(1024 * 1024)
+                  if not chunk:
+                      break
+                  if len(prefix) < 4096:
+                      prefix.extend(chunk[:4096 - len(prefix)])
+                  if b"\x00" in chunk:
+                      has_nul = True
+              stderr = process.stderr.read()
+              if process.wait() != 0:
+                  raise RuntimeError(f"cannot read Git blob {path!r}: {stderr.decode(errors='replace')}")
+              return bytes(prefix), has_nul
+
+          def parse_changed_files(base_sha, head_sha):
+              raw = git("diff", "--name-status", "-z", "--find-renames", base_sha, head_sha)
+              fields = raw.split(b"\0")
+              if fields and fields[-1] == b"":
+                  fields.pop()
+              changed = []
+              index = 0
+              while index < len(fields):
+                  status_raw = fields[index].decode("ascii")
+                  index += 1
+                  status = status_raw[0]
+                  if status in {"R", "C"}:
+                      previous = fields[index].decode("utf-8", "surrogateescape")
+                      path = fields[index + 1].decode("utf-8", "surrogateescape")
+                      index += 2
+                  else:
+                      previous = ""
+                      path = fields[index].decode("utf-8", "surrogateescape")
+                      index += 1
+                  changed.append({"status": status_raw, "code": status, "path": path, "previous": previous})
+              return changed
+
+          def inspect_findings(base_sha, head_sha, head_ref):
+              findings = []
+              for change in parse_changed_files(base_sha, head_sha):
+                  path = change["path"]
+                  previous = change["previous"]
+                  oid = ""
+                  size = None
+                  object_type = None
+                  if change["code"] == "D":
+                      old_spec = f"{base_sha}:{path}"
+                      try:
+                          object_type = git("cat-file", "-t", old_spec).decode().strip()
+                      except subprocess.CalledProcessError:
+                          raise RuntimeError(f"deleted path is missing from PR base: {path!r}")
+                      if object_type == "blob":
+                          oid = git("rev-parse", old_spec).decode().strip()
+                          size = int(git("cat-file", "-s", old_spec))
+                  else:
+                      spec = f"{head_ref}:{path}"
+                      try:
+                          object_type = git("cat-file", "-t", spec).decode().strip()
+                      except subprocess.CalledProcessError:
+                          raise RuntimeError(f"changed path is missing from PR head: {path!r}")
+                      if object_type == "blob":
+                          oid = git("rev-parse", spec).decode().strip()
+                          size = int(git("cat-file", "-s", spec))
+                  workflow_change = path.startswith(".github/workflows/") or previous.startswith(".github/workflows/")
+                  if workflow_change:
+                      findings.append({**change, "reason": "workflow", "detail": "GitHub Actions workflow changed", "blob": oid, "size": size})
+                  if change["code"] == "D":
+                      continue
+                  if object_type != "blob":
+                      continue
+                  if size > size_limit:
+                      findings.append({**change, "reason": "large", "detail": f"{format_size(size)} ({size:,} bytes) exceeds the 5 MiB threshold", "blob": oid, "size": size})
+                  prefix, has_nul = read_blob(head_ref, path)
+                  signature = detect_signature(prefix)
+                  if signature:
+                      findings.append({**change, "reason": "format", "detail": signature, "blob": oid, "size": size})
+                  elif has_nul:
+                      findings.append({**change, "reason": "binary", "detail": "NUL byte detected; file may be binary", "blob": oid, "size": size})
+              findings.sort(key=lambda item: (
+                  item["path"].encode("utf-8", "surrogateescape"),
+                  item["previous"].encode("utf-8", "surrogateescape"),
+                  item["status"], item["reason"], item["blob"],
+                  -1 if item["size"] is None else item["size"],
+              ))
+              return findings
+
+          def finding_record(item):
+              return {
+                  "status": item["status"], "path": item["path"],
+                  "previous": item["previous"], "reason": item["reason"],
+                  "detail": item["detail"], "blob": item["blob"], "size": item["size"],
+              }
+
+          def render_finding(item):
+              if item["previous"]:
+                  location = f"{path_text(item['previous'])} → {path_text(item['path'])}"
+              else:
+                  location = path_text(item["path"])
+              return f"- {location} — {html.escape(item['detail'])}"
+
+          def render_findings(findings, budget=42000):
+              lines = []
+              used = 0
+              for item in findings:
+                  line = render_finding(item)
+                  encoded_size = len((line + "\n").encode("utf-8", "surrogateescape"))
+                  if used + encoded_size > budget:
+                      break
+                  lines.append(line)
+                  used += encoded_size
+              omitted = len(findings) - len(lines)
+              if omitted:
+                  lines.append("")
+                  lines.append(f"_{omitted} additional findings are omitted here. The approval ID covers all {len(findings)} findings; see the workflow run for the complete list._")
+              return "\n".join(lines), omitted
+
+          def findings_block(body):
+              match = re.search(r"<!-- findings:start -->\n(.*?)\n<!-- findings:end -->", body, re.S)
+              return match.group(1) if match else "_The previous findings are available in this comment's edit history._"
+
+          def permission_for(login):
+              quoted = urllib.parse.quote(login, safe="")
+              try:
+                  value = api("GET", f"/repos/{repository}/collaborators/{quoted}/permission")
+              except RuntimeError as error:
+                  if "failed: 404:" in str(error):
+                      return "none"
+                  raise
+              return value.get("permission", "none")
+
+          def valid_approvals(comments, approval_id):
+              valid = []
+              unauthorized = []
+              expected = f"/file-precheck approve {approval_id}"
+              for comment in comments:
+                  body = comment.get("body") or ""
+                  normalized = body.strip()
+                  if normalized != expected or not command_re.fullmatch(normalized):
+                      continue
+                  user = comment.get("user") or {}
+                  if user.get("type") != "User":
+                      continue
+                  permission = permission_for(user.get("login", ""))
+                  if permission in allowed_permissions:
+                      valid.append(comment)
+                  else:
+                      unauthorized.append(comment)
+              valid.sort(key=lambda item: (item.get("updated_at") or "", item["id"]))
+              return valid, unauthorized
+
+          def approval_comment_snapshot(comments):
+              snapshot = []
+              for comment in comments:
+                  body = (comment.get("body") or "").strip()
+                  if body.startswith("/file-precheck approve"):
+                      snapshot.append({
+                          "id": comment["id"], "body": body,
+                          "updated_at": comment.get("updated_at"),
+                          "user": (comment.get("user") or {}).get("login"),
+                      })
+              return sorted(snapshot, key=lambda item: item["id"])
+
+          def own_negative_reactions(comment_id):
+              reactions = api(
+                  "GET", f"/repos/{repository}/issues/comments/{comment_id}/reactions?per_page=100",
+                  accept="application/vnd.github+json", paginate=True,
+              )
+              return [reaction for reaction in reactions if reaction.get("content") == "-1" and (reaction.get("user") or {}).get("login") == bot_login]
+
+          def sync_reactions(valid, unauthorized):
+              try:
+                  for comment in valid:
+                      for reaction in own_negative_reactions(comment["id"]):
+                          api("DELETE", f"/repos/{repository}/issues/comments/{comment['id']}/reactions/{reaction['id']}", accept="application/vnd.github+json")
+                  for comment in unauthorized:
+                      if not own_negative_reactions(comment["id"]):
+                          api("POST", f"/repos/{repository}/issues/comments/{comment['id']}/reactions", {"content": "-1"}, accept="application/vnd.github+json")
+              except Exception as error:
+                  print(f"::warning title=File Precheck::Could not synchronize command reactions: {workflow_command_escape(str(error))}")
+
+          def comment_body(state, metadata, findings, approval=None, previous_block=None):
+              encoded = encode_metadata(metadata)
+              if state == "resolved":
+                  return "\n".join([
+                      marker, f"{metadata_prefix} {encoded} -->", "", "## File Precheck — resolved", "",
+                      "No suspicious files were found in the latest revision.", "", "<details>",
+                      "<summary>Previously reported findings</summary>", "", previous_block, "", "</details>", "",
+                      "Large, binary, archive, executable, database, document, and workflow files are allowed when intentional.",
+                  ])
+              rendered, _ = render_findings(findings)
+              lines = [marker, f"{metadata_prefix} {encoded} -->", ""]
+              if state == "acknowledged":
+                  login = html.escape((approval.get("user") or {}).get("login", ""), quote=False)
+                  timestamp = approval.get("updated_at") or approval.get("created_at")
+                  lines.extend([
+                      "## File Precheck — acknowledged", "",
+                      f"Acknowledged by @{login} at {timestamp} ([approval comment]({approval['html_url']})).", "",
+                  ])
+              else:
+                  lines.extend([
+                      "## File Precheck — maintainer review required", "",
+                      "This check found files that require explicit maintainer review:", "",
+                  ])
+              lines.extend(["<!-- findings:start -->", rendered, "<!-- findings:end -->", ""])
+              lines.extend([
+                  "Large, binary, archive, executable, database, document, and workflow files are allowed when intentional.",
+                  "The findings above report file facts; maintainers decide whether each change belongs in the pull request.", "",
+                  f"Findings ID: `{metadata['fingerprint'][:16]}`", "",
+              ])
+              if state == "acknowledged":
+                  lines.extend([
+                      "This acknowledgement applies to this exact findings episode. Any change to the findings requires another acknowledgement.",
+                  ])
+              else:
+                  lines.extend([
+                      "A repository member with write, maintain, or admin permission can acknowledge this exact findings episode by posting:", "",
+                      "```text", f"/file-precheck approve {metadata['approval_id']}", "```",
+                  ])
+              return "\n".join(lines)
+
+          def write_summary(findings, fingerprint):
+              summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+              print(f"File Precheck findings ({len(findings)}), fingerprint {fingerprint}")
+              for item in findings:
+                  print(json.dumps(finding_record(item), ensure_ascii=True, sort_keys=True))
+              if not summary_path:
+                  return
+              with open(summary_path, "a", encoding="utf-8") as stream:
+                  stream.write("## File Precheck\n\n")
+                  if not findings:
+                      stream.write("No suspicious files found.\n")
+                      return
+                  stream.write(f"{len(findings)} findings. Fingerprint: `{fingerprint}`\n\n")
+                  for item in findings:
+                      stream.write(render_finding(item) + "\n")
+
+          def update_comment(comments, findings, fingerprint, head_sha):
+              owned = sorted(
+                  [
+                      comment for comment in comments
+                      if (comment.get("user") or {}).get("login") == bot_login
+                      and (comment.get("body") or "").startswith((marker, legacy_marker))
+                  ],
+                  key=lambda item: (item.get("created_at") or "", item["id"]),
+              )
+              canonical = owned[0] if owned else None
+              metadata = comment_metadata(canonical.get("body") or "") if canonical else None
+
+              if findings:
+                  same_episode = bool(
+                      canonical and metadata and metadata.get("state") in {"pending", "acknowledged"}
+                      and metadata.get("fingerprint") == fingerprint and metadata.get("episode_seed")
+                  )
+                  # The run ID makes a recreated canonical comment a new
+                  # episode even when it was deleted without a new PR commit.
+                  episode_seed = metadata["episode_seed"] if same_episode else f"{head_sha}:{run_id}"
+                  approval_id = hashlib.sha256(f"{fingerprint}\0{episode_seed}".encode()).hexdigest()
+                  new_metadata = {
+                      "version": 2, "state": "pending", "fingerprint": fingerprint,
+                      "episode_seed": episode_seed, "approval_id": approval_id,
+                  }
+                  valid, unauthorized = valid_approvals(comments, approval_id)
+                  approval = valid[0] if valid else None
+                  state = "acknowledged" if approval else "pending"
+                  new_metadata["state"] = state
+                  body = comment_body(state, new_metadata, findings, approval=approval)
+                  sync_reactions(valid, unauthorized)
+                  semantic_state = "success" if approval else "failure"
+                  description = "Suspicious files acknowledged by a maintainer" if approval else "Suspicious files require maintainer review"
+              elif canonical:
+                  if metadata and metadata.get("state") == "resolved":
+                      body = canonical.get("body") or ""
+                  else:
+                      previous_block = findings_block(canonical.get("body") or "")
+                      new_metadata = {"version": 2, "state": "resolved"}
+                      body = comment_body("resolved", new_metadata, [], previous_block=previous_block)
+                  semantic_state = "success"
+                  description = "No suspicious files found"
+              else:
+                  body = None
+                  semantic_state = "success"
+                  description = "No suspicious files found"
+
+              if body is not None:
+                  if canonical:
+                      if body != (canonical.get("body") or ""):
+                          api("PATCH", f"/repos/{repository}/issues/comments/{canonical['id']}", {"body": body})
+                  else:
+                      canonical = api("POST", f"/repos/{repository}/issues/{pr_number}/comments", {"body": body})
+
+              for duplicate in owned[1:]:
+                  try:
+                      api("DELETE", f"/repos/{repository}/issues/comments/{duplicate['id']}")
+                  except Exception as error:
+                      print(f"::warning title=File Precheck::Could not remove duplicate File Precheck comment {duplicate['id']}: {workflow_command_escape(str(error))}")
+              return semantic_state, description
+
+          head_sha = None
+          try:
+              pr = get_pr()
+              if pr.get("state") != "open":
+                  print("Pull request is not open; no evaluation is needed.")
+                  sys.exit(0)
+              base_sha = pr["base"]["sha"]
+              head_sha = pr["head"]["sha"]
+              set_status(head_sha, "pending", "Evaluating changed files and acknowledgements")
+
+              base_ref = "refs/remotes/origin/precheck-base"
+              head_ref = "refs/remotes/origin/precheck-head"
+              git("fetch", "--no-tags", "origin", f"+{base_sha}:{base_ref}", f"+refs/pull/{pr_number}/head:{head_ref}")
+              fetched_head = git("rev-parse", head_ref).decode().strip()
+              if fetched_head != head_sha:
+                  raise StaleRun("PR head changed before evaluation")
+
+              merge_base = git("merge-base", base_sha, head_sha).decode().strip()
+              findings = inspect_findings(merge_base, head_sha, head_ref)
+              canonical_bytes = b"\n".join(
+                  json.dumps(finding_record(item), ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode()
+                  for item in findings
+              )
+              fingerprint = hashlib.sha256(canonical_bytes).hexdigest()
+              write_summary(findings, fingerprint)
+              for item in findings:
+                  annotate(item["path"], item["detail"])
+
+              # Re-read both the PR and comments immediately before publishing.
+              current_pr = get_pr()
+              if current_pr.get("state") != "open" or current_pr["head"]["sha"] != head_sha:
+                  raise StaleRun("PR head changed during evaluation")
+              comments = get_comments()
+              approval_snapshot = approval_comment_snapshot(comments)
+              semantic_state, description = update_comment(comments, findings, fingerprint, head_sha)
+
+              final_pr = get_pr()
+              if final_pr.get("state") != "open" or final_pr["head"]["sha"] != head_sha:
+                  raise StaleRun("PR head changed before status publication")
+              if approval_comment_snapshot(get_comments()) != approval_snapshot:
+                  raise StaleRun("Acknowledgement comments changed during evaluation")
+              set_status(head_sha, semantic_state, description)
+          except StaleRun as error:
+              print(f"{error}; a newer workflow run will evaluate the current head.")
+              sys.exit(0)
+          except Exception as error:
+              print(f"File Precheck evaluator error: {error}", file=sys.stderr)
+              if head_sha:
+                  try:
+                      set_status(head_sha, "error", "File Precheck evaluator failed; inspect the workflow run")
+                  except Exception as status_error:
+                      print(f"Could not publish error status: {status_error}", file=sys.stderr)
+              raise
+          PY
