@@ -342,11 +342,11 @@ jobs:
                   if not grouped or grouped[-1][0] != key:
                       grouped.append((key, item, []))
                   grouped[-1][2].append(item["detail"])
-              lines = ["| File | Reason |", "| --- | --- |"]
+              lines = []
               used = 0
               shown_findings = 0
               for _, item, details in grouped:
-                  line = f"| {finding_location(item)} | {'; '.join(html.escape(detail) for detail in details)} |"
+                  line = f"- {finding_location(item)} — {'; '.join(html.escape(detail) for detail in details)}"
                   encoded_size = len((line + "\n").encode("utf-8", "surrogateescape"))
                   if used + encoded_size > budget:
                       break
@@ -456,8 +456,8 @@ jobs:
               else:
                   lines.extend([
                       "If these changes are accidental, update the PR.", "",
-                      "If they are intentional, a maintainer with write, maintain, or admin permission can approve this exact set by commenting:", "",
-                      "```text", f"/file-precheck approve {metadata['approval_id']}", "```",
+                      "If they are intentional, a maintainer with write, maintain, or admin repository permission can approve this exact set by commenting:", "",
+                      f"`/file-precheck approve {metadata['approval_id']}`",
                       "", "Approval applies only to the flagged paths and contents above.",
                   ])
               return "\n".join(lines)
